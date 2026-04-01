@@ -1,0 +1,46 @@
+[
+  {
+    "model": "clips.clip",
+    "pk": 1,
+    "fields": {
+      "clip_id": "newer",
+      "url": "https://www.twitch.tv/test/clip/newer",
+      "embed_url": "https://clips.twitch.tv/embed?clip=newer",
+      "broadcaster_id": 12345,
+      "broadcaster_name": "teststreamer",
+      "creator_id": 67890,
+      "creator_name": "testviewer",
+      "game_id": 509658,
+      "language": "en",
+      "title": "Clip newer",
+      "view_count": 100,
+      "created_at": "2023-06-01T00:00:00Z",
+      "thumbnail_url": "https://example.com/thumb.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 2,
+    "fields": {
+      "clip_id": "older",
+      "url": "https://www.twitch.tv/test/clip/older",
+      "embed_url": "https://clips.twitch.tv/embed?clip=older",
+      "broadcaster_id": 12345,
+      "broadcaster_name": "teststreamer",
+      "creator_id": 67890,
+      "creator_name": "testviewer",
+      "game_id": 509658,
+      "language": "en",
+      "title": "Clip older",
+      "view_count": 100,
+      "created_at": "2021-01-01T00:00:00Z",
+      "thumbnail_url": "https://example.com/thumb.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  }
+]

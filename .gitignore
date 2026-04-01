@@ -1,0 +1,12 @@
+node_modules/
+dist/
+web/dist/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/engine.lock
+.env
+*.tsbuildinfo
+
+# Generated fixture media (regenerate with pnpm fixtures:generate)
+fixtures/archive/media/

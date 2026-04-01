@@ -1,0 +1,68 @@
+{
+  "name": "twitch-clip-archive-youtube-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#server/*": "./server/*",
+    "#web/*": "./web/src/*",
+    "#shared/*": "./shared/*"
+  },
+  "scripts": {
+    "dev": "concurrently -k --kill-signal SIGTERM -n server,web -c blue,green \"tsx watch --clear-screen=false server/index.ts\" \"vite --config web/vite.config.ts\"",
+    "dev:server": "tsx watch --clear-screen=false server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "pnpm build:web",
+    "build:web": "vite build --config web/vite.config.ts",
+    "ci:typecheck": "tsgo --noEmit -p server/tsconfig.json",
+    "ci:lint": "oxlint",
+    "ci:format": "oxfmt --check",
+    "ci:test": "vitest run",
+    "ci": "pnpm run '/^ci:/'",
+    "fmt": "oxfmt",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fixtures:generate": "tsx scripts/generate-fixtures.ts",
+    "dev:seed": "tsx scripts/seed-dev-db.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.12",
+    "@js-temporal/polyfill": "^0.5.1",
+    "@tanstack/react-query": "^5.96.1",
+    "@tanstack/react-table": "^8.21.3",
+    "better-sqlite3": "^12.8.0",
+    "dotenv": "^17.3.1",
+    "googleapis": "^171.4.0",
+    "hono": "^4.12.9",
+    "pino": "^10.3.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^24.12.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@typescript/native-preview": "7.0.0-dev.20260401.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.1.0",
+    "oxfmt": "^0.43.0",
+    "oxlint": "^1.58.0",
+    "oxlint-tsgolint": "^0.19.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.0",
+    "recharts": "^3.8.1",
+    "tailwindcss": "^4.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3",
+    "vitest": "^4.1.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

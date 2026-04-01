@@ -1,0 +1,16 @@
+services:
+  youtube-sync:
+    build: .
+    container_name: twitch-clip-archive-youtube-sync
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+      - /path/to/twitch-clip-archive:/archive:ro
+    environment:
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - OAUTH_REDIRECT_BASE=${OAUTH_REDIRECT_BASE:-http://localhost:3000}
+      - ARCHIVE_PATH=/archive
+      - DATA_PATH=/app/data

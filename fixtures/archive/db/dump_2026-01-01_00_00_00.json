@@ -1,0 +1,223 @@
+[
+  {
+    "model": "clips.clip",
+    "pk": 1,
+    "fields": {
+      "clip_id": "TestClipAlpha-abc123",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipAlpha-abc123",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipAlpha-abc123",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100001,
+      "creator_name": "viewer_one",
+      "game_id": 509658,
+      "language": "nl",
+      "title": "Amazing play in ranked",
+      "view_count": 150,
+      "created_at": "2021-03-15T14:30:00Z",
+      "thumbnail_url": "https://example.com/thumb1.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 2,
+    "fields": {
+      "clip_id": "TestClipBeta-def456",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipBeta-def456",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipBeta-def456",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100002,
+      "creator_name": "viewer_two",
+      "game_id": 509658,
+      "language": "nl",
+      "title": "Clutch moment at the end",
+      "view_count": 320,
+      "created_at": "2021-06-22T19:15:00Z",
+      "thumbnail_url": "https://example.com/thumb2.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 3,
+    "fields": {
+      "clip_id": "TestClipGamma-ghi789",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipGamma-ghi789",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipGamma-ghi789",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100003,
+      "creator_name": "viewer_three",
+      "game_id": 32982,
+      "language": "en",
+      "title": "This game is broken lol",
+      "view_count": 45,
+      "created_at": "2022-01-10T08:00:00Z",
+      "thumbnail_url": "https://example.com/thumb3.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": false,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 4,
+    "fields": {
+      "clip_id": "TestClipDelta-jkl012",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipDelta-jkl012",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipDelta-jkl012",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100001,
+      "creator_name": "viewer_one",
+      "game_id": 509658,
+      "language": "nl",
+      "title": "How did that hit?!",
+      "view_count": 890,
+      "created_at": "2022-04-14T18:50:58Z",
+      "thumbnail_url": "https://example.com/thumb4.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 5,
+    "fields": {
+      "clip_id": "TestClipEpsilon-mno345",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipEpsilon-mno345",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipEpsilon-mno345",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100004,
+      "creator_name": "viewer_four",
+      "game_id": null,
+      "language": "nl",
+      "title": "Just chatting moment",
+      "view_count": 12,
+      "created_at": "2022-08-01T22:30:00Z",
+      "thumbnail_url": "https://example.com/thumb5.jpg",
+      "clip_archived": false,
+      "thumbnail_archived": false,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 6,
+    "fields": {
+      "clip_id": "TestClipZeta-pqr678",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipZeta-pqr678",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipZeta-pqr678",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100002,
+      "creator_name": "viewer_two",
+      "game_id": 509658,
+      "language": "nl",
+      "title": "Deleted clip from twitch",
+      "view_count": 500,
+      "created_at": "2023-02-14T12:00:00Z",
+      "thumbnail_url": "https://example.com/thumb6.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": true
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 7,
+    "fields": {
+      "clip_id": "TestClipEta-stu901",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipEta-stu901",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipEta-stu901",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100005,
+      "creator_name": "viewer_five",
+      "game_id": 509658,
+      "language": "en",
+      "title": "Insane 1v5 ace",
+      "view_count": 2100,
+      "created_at": "2023-07-04T16:45:00Z",
+      "thumbnail_url": "https://example.com/thumb7.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 8,
+    "fields": {
+      "clip_id": "TestClipTheta-vwx234",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipTheta-vwx234",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipTheta-vwx234",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100003,
+      "creator_name": "viewer_three",
+      "game_id": 32982,
+      "language": "nl",
+      "title": "Stream sniper caught",
+      "view_count": 3400,
+      "created_at": "2024-01-20T10:10:00Z",
+      "thumbnail_url": "https://example.com/thumb8.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 9,
+    "fields": {
+      "clip_id": "TestClipIota-yza567",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipIota-yza567",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipIota-yza567",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100001,
+      "creator_name": "viewer_one",
+      "game_id": 509658,
+      "language": "nl",
+      "title": "Rage quit on stream",
+      "view_count": 780,
+      "created_at": "2024-09-05T20:00:00Z",
+      "thumbnail_url": "https://example.com/thumb9.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  {
+    "model": "clips.clip",
+    "pk": 10,
+    "fields": {
+      "clip_id": "TestClipKappa-bcd890",
+      "url": "https://www.twitch.tv/georgy177/clip/TestClipKappa-bcd890",
+      "embed_url": "https://clips.twitch.tv/embed?clip=TestClipKappa-bcd890",
+      "broadcaster_id": 135075027,
+      "broadcaster_name": "georgy177",
+      "creator_id": 100006,
+      "creator_name": "viewer_six",
+      "game_id": 509658,
+      "language": "nl",
+      "title": "New personal best!",
+      "view_count": 95,
+      "created_at": "2025-12-31T23:59:00Z",
+      "thumbnail_url": "https://example.com/thumb10.jpg",
+      "clip_archived": true,
+      "thumbnail_archived": true,
+      "deleted_on_twitch": false
+    }
+  },
+  { "model": "auth.user", "pk": 1, "fields": { "username": "admin", "email": "admin@example.com" } }
+]

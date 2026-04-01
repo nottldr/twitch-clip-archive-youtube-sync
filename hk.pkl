@@ -1,0 +1,42 @@
+amends "package://github.com/jdx/hk/releases/download/v1.35.0/hk@1.35.0#/Config.pkl"
+
+local linters = new Mapping<String, Step> {
+    ["oxfmt"] {
+        glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
+        check = "pnpm oxfmt --check {{ files }}"
+        fix = "pnpm oxfmt {{ files }}"
+    }
+    ["oxlint"] {
+        glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
+        check = "pnpm oxlint {{ files }}"
+    }
+    ["tsgo"] {
+        glob = List("*.ts", "*.tsx")
+        check = "pnpm tsgo --noEmit -p server/tsconfig.json"
+        batch = true
+    }
+    ["test"] {
+        check = "pnpm test"
+        batch = true
+    }
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps = linters
+    }
+    ["fix"] {
+        fix = true
+        steps {
+            ["oxfmt"] {
+                glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
+                fix = "pnpm oxfmt {{ files }}"
+            }
+        }
+    }
+    ["check"] {
+        steps = linters
+    }
+}
