@@ -19,12 +19,7 @@ export function createStatsRoutes(
     return c.json({
       clips: stats,
       quota,
-      engine: {
-        status: engine.getStatus(),
-        syncMode: engine.getSyncMode(),
-        paused: engine.isPaused(),
-        currentUpload: engine.getCurrentUpload(),
-      },
+      engine: engine.getSnapshot(),
       estimated,
     });
   });

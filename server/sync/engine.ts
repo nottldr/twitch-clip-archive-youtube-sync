@@ -1,34 +1,39 @@
+import type { EngineSnapshot, EngineStatePath } from "#shared/schemas.js";
 import type { Scheduler } from "./scheduler.js";
 
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
+
+import {
+  type SyncEvent,
+  type SyncMachine,
+  type UploadResult,
+  createSyncMachine,
+} from "#shared/sync-machine.js";
+import { Temporal } from "@js-temporal/polyfill";
+import { type SnapshotFrom, createActor } from "xstate";
 
 import { readLatestDump } from "#server/archive/reader.js";
 import type { Config } from "#server/config.js";
 import type { ClipsRepository } from "#server/db/repositories/clips.js";
+import type { EngineStateRepository } from "#server/db/repositories/engine-state.js";
 import type { UploadsRepository } from "#server/db/repositories/uploads.js";
+import { createLogger } from "#server/logger.js";
 import type { AuthManager } from "#server/youtube/auth.js";
 import { UploadError, uploadClip } from "#server/youtube/uploader.js";
 
-export type EngineStatus = "running" | "idle" | "paused" | "error" | "stopped";
+import { discoverQuotaLimit } from "./quota-discovery.js";
+
+const logger = createLogger("engine");
 
 export interface EngineEventHandler {
-  onUploadSuccess(clipId: string, youtubeId: string): void;
-  onUploadFailure(clipId: string, error: string): void;
-  onQuotaExhausted(): void;
-  onSyncError(error: string): void;
-  onStatusChange(status: EngineStatus): void;
-  onAuthComplete(): void;
+  onStateChange(snapshot: EngineSnapshot): void;
+  onUploadProgress(clipId: string, bytesTransferred: number, totalBytes: number): void;
 }
 
 const noopHandler: EngineEventHandler = {
-  onUploadSuccess: () => {},
-  onUploadFailure: () => {},
-  onQuotaExhausted: () => {},
-  onSyncError: () => {},
-  onStatusChange: () => {},
-  onAuthComplete: () => {},
+  onStateChange: () => {},
+  onUploadProgress: () => {},
 };
 
 export function createSyncEngine(
@@ -37,141 +42,238 @@ export function createSyncEngine(
   uploadsRepo: UploadsRepository,
   scheduler: Scheduler,
   authManager: AuthManager,
+  engineStateRepo: EngineStateRepository,
   eventHandler: EngineEventHandler = noopHandler,
 ) {
-  let status: EngineStatus = "idle";
-  let running = false;
-  let userPaused = false;
-  let pauseReason: "quota" | "upload-limit" | null = null;
-  let currentUploadClipId: string | null = null;
-  let loopTimeout: ReturnType<typeof setTimeout> | null = null;
-  let archivePollTimeout: ReturnType<typeof setTimeout> | null = null;
-  const lockPath = resolve(config.dataPath, "engine.lock");
+  // Create the XState machine with injected dependencies
+  const machine = createSyncMachine({
+    isAuthenticated: () => authManager.isAuthenticated(),
+    canUpload: () => scheduler.canUpload(),
+    msUntilQuotaReset: () => scheduler.msUntilQuotaReset(),
+    uploadIntervalMs: config.uploadIntervalMs,
+    archivePollIntervalMs: config.archivePollIntervalMs,
+    initialUserPaused: engineStateRepo.isUserPaused(),
 
-  function getStatus(): EngineStatus {
-    return status;
-  }
-
-  function getSyncMode(): "auto" | "manual" {
-    return config.syncMode;
-  }
-
-  function setStatus(newStatus: EngineStatus): void {
-    if (status !== newStatus) {
-      status = newStatus;
-      eventHandler.onStatusChange(status);
-    }
-  }
-
-  function acquireLock(): boolean {
-    if (existsSync(lockPath)) {
-      const existingPid = readFileSync(lockPath, "utf-8").trim();
-      // Check if the process is still running
-      try {
-        process.kill(Number.parseInt(existingPid, 10), 0);
-        // Process exists, lock is held
-        return false;
-      } catch {
-        // Process doesn't exist, stale lock
+    async importArchive() {
+      const clips = readLatestDump(config.archivePath);
+      if (clips.length === 0) return 0;
+      const imported = clipsRepo.upsertFromArchive(clips);
+      if (config.ignoredClipIds.length > 0) {
+        clipsRepo.markIgnored(config.ignoredClipIds);
       }
-    }
-    writeFileSync(lockPath, String(process.pid));
-    return true;
-  }
+      return imported;
+    },
 
-  function releaseLock(): void {
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // Already cleaned up
-    }
-  }
-
-  function importArchive(): number {
-    const clips = readLatestDump(config.archivePath);
-    if (clips.length === 0) {
-      eventHandler.onSyncError(`No clips found in archive at ${config.archivePath}`);
-      return 0;
-    }
-    const newCount = clipsRepo.upsertFromArchive(clips);
-    return newCount;
-  }
-
-  async function processNextClip(): Promise<boolean> {
-    if (userPaused) return false;
-
-    // Check quota
-    if (!scheduler.canUpload()) {
-      setStatus("paused");
-      eventHandler.onQuotaExhausted();
-      return false;
-    }
-
-    // Get next pending clip
-    const clip = clipsRepo.getNextPending() ?? clipsRepo.getNextRetryable(config.maxRetryCount);
-    if (!clip) {
-      return false; // Nothing to process
-    }
-
-    // Verify file exists and is > 1KB
-    const mp4Path = resolve(config.archivePath, "media/clips", `${clip.clip_id}.mp4`);
-    try {
-      const stat = statSync(mp4Path);
-      if (stat.size < 1024) {
-        const reason = `MP4 too small (${stat.size} bytes)`;
-        clipsRepo.markSkipped(clip.clip_id, reason);
-        eventHandler.onUploadFailure(clip.clip_id, reason);
-        return true;
+    async discoverQuota() {
+      if (!config.googleProjectNumber) return null;
+      const limit = await discoverQuotaLimit(authManager, config.googleProjectNumber);
+      if (limit !== null) {
+        scheduler.setDiscoveredLimit(limit);
       }
-    } catch {
-      clipsRepo.markSkipped(clip.clip_id, "MP4 file not found");
-      eventHandler.onUploadFailure(clip.clip_id, "MP4 file not found");
-      return true;
-    }
+      return limit;
+    },
 
-    // Mark as uploading (only one upload at a time, sequential processing)
-    clipsRepo.markUploading(clip.clip_id);
-    currentUploadClipId = clip.clip_id;
+    performUpload(clipId, onProgress) {
+      return doUpload(clipId, onProgress);
+    },
 
-    if (config.dryRun) {
-      const fakeId = `dry-run-${randomUUID().slice(0, 8)}`;
-      clipsRepo.markUploaded(clip.clip_id, fakeId);
+    // Side effects (called by XState actions on transitions)
+    onClipUploading(clipId) {
+      clipsRepo.markUploading(clipId);
+      logger.info({ clipId }, "Clip uploading");
+    },
+    onClipUploaded(clipId, youtubeId) {
+      clipsRepo.markUploaded(clipId, youtubeId);
+      logger.info({ clipId, youtubeId }, "Upload success");
+    },
+    onClipFailed(clipId, error, code) {
+      clipsRepo.markFailed(clipId, `${code}: ${error}`);
+      logger.warn({ clipId, error, code }, "Upload failure");
+    },
+    onQuotaRecorded() {
       scheduler.recordUpload();
-      currentUploadClipId = null;
-      eventHandler.onUploadSuccess(clip.clip_id, fakeId);
-      return true;
-    }
+    },
+    onQuotaLimitExceeded() {
+      clipsRepo.resetInterrupted();
+    },
 
-    // Real upload
-    try {
-      const youtube = await authManager.getAuthenticatedClient();
-      if (!youtube) {
-        // Not authenticated, don't mark the clip as failed (it's not the clip's fault).
-        // Just go idle and wait for auth.
-        setStatus("idle");
-        eventHandler.onSyncError("Not authenticated, waiting for OAuth connection");
-        return false;
+    async selectNextClip() {
+      // Reset any stuck "uploading" clips first
+      clipsRepo.resetInterrupted();
+
+      const clip = clipsRepo.getNextPending() ?? clipsRepo.getNextRetryable(config.maxRetryCount);
+
+      if (!clip) return null;
+
+      // Validate file exists
+      const mp4Path = resolve(config.archivePath, "media/clips", `${clip.clip_id}.mp4`);
+
+      try {
+        const stat = statSync(mp4Path);
+        if (stat.size < 1024) {
+          const reason = `MP4 too small (${stat.size} bytes)`;
+          clipsRepo.markSkipped(clip.clip_id, reason);
+          logger.warn({ clipId: clip.clip_id, reason }, "Clip skipped");
+          return null;
+        }
+      } catch {
+        clipsRepo.markSkipped(clip.clip_id, "MP4 file not found");
+        logger.warn({ clipId: clip.clip_id }, "Clip skipped: MP4 file not found");
+        return null;
       }
 
-      const twitchClip = {
-        clipId: clip.clip_id,
-        url: clip.url,
-        embedUrl: clip.embed_url,
-        broadcasterId: clip.broadcaster_id,
-        broadcasterName: clip.broadcaster_name,
-        creatorId: clip.creator_id,
-        creatorName: clip.creator_name,
-        gameId: clip.game_id,
-        language: clip.language ?? "en",
-        title: clip.title,
-        viewCount: clip.view_count,
-        createdAt: clip.created_at,
-        thumbnailUrl: clip.thumbnail_url ?? "",
-        clipArchived: !!clip.clip_archived,
-        thumbnailArchived: !!clip.thumbnail_archived,
-        deletedOnTwitch: !!clip.deleted_on_twitch,
-      };
+      return { clipId: clip.clip_id, clipTitle: clip.title };
+    },
+  });
 
+  const actor = createActor(machine);
+  let previousStatePath: EngineStatePath = "stopped";
+
+  type MachineSnapshot = SnapshotFrom<SyncMachine>;
+
+  /** Resolve an XState snapshot to our typed enum using matches() */
+  function resolveStatePath(s: MachineSnapshot): EngineStatePath {
+    if (s.matches({ active: { waiting: "quotaExhausted" } }))
+      return "active.waiting.quotaExhausted";
+    if (s.matches({ active: { waiting: "uploadLimit" } })) return "active.waiting.uploadLimit";
+    if (s.matches({ active: { waiting: "cooldown" } })) return "active.waiting.cooldown";
+    if (s.matches({ active: { waiting: "noClips" } })) return "active.waiting.noClips";
+    if (s.matches({ active: { waiting: "error" } })) return "active.waiting.error";
+    if (s.matches({ active: { blocked: "awaitingAuth" } })) return "active.blocked.awaitingAuth";
+    if (s.matches({ active: { blocked: "userPaused" } })) return "active.blocked.userPaused";
+    if (s.matches({ active: "uploading" })) return "active.uploading";
+    if (s.matches({ active: "deciding" })) return "active.deciding";
+    if (s.matches({ active: "reimporting" })) return "active.reimporting";
+    if (s.matches({ active: "rediscovering" })) return "active.rediscovering";
+    if (s.matches({ starting: "importingArchive" })) return "starting.importingArchive";
+    if (s.matches({ starting: "discoveringQuota" })) return "starting.discoveringQuota";
+    if (s.matches({ starting: "settling" })) return "starting.settling";
+    if (s.matches("stopped")) return "stopped";
+    return "stopped";
+  }
+
+  // Subscribe to state changes and progress updates
+  let lastBytesTransferred: number | null = null;
+  let lastUserPaused = false;
+  actor.subscribe((snapshot) => {
+    const statePath = resolveStatePath(snapshot);
+    const ctx = snapshot.context;
+
+    // Broadcast on state path change or userPaused flag change
+    if (statePath !== previousStatePath || ctx.userPaused !== lastUserPaused) {
+      previousStatePath = statePath;
+      lastUserPaused = ctx.userPaused;
+      eventHandler.onStateChange(getSnapshot());
+    }
+
+    // Broadcast upload progress (only when bytes change)
+    if (
+      ctx.clipId &&
+      ctx.bytesTransferred !== null &&
+      ctx.bytesTransferred !== lastBytesTransferred
+    ) {
+      lastBytesTransferred = ctx.bytesTransferred;
+      eventHandler.onUploadProgress(ctx.clipId, ctx.bytesTransferred, ctx.totalBytes ?? 0);
+    } else if (!ctx.clipId) {
+      lastBytesTransferred = null;
+    }
+  });
+
+  function getSnapshot(): EngineSnapshot {
+    const snapshot = actor.getSnapshot();
+    const ctx = snapshot.context;
+    return {
+      state: resolveStatePath(snapshot),
+      context: {
+        clipId: ctx.clipId,
+        clipTitle: ctx.clipTitle,
+        uploadStartedAt: ctx.uploadStartedAt,
+        bytesTransferred: ctx.bytesTransferred,
+        totalBytes: ctx.totalBytes,
+        waitResumeAt: ctx.waitResumeAt,
+        lastError: ctx.lastError,
+        lastImportAt: ctx.lastImportAt,
+        clipsImported: ctx.clipsImported,
+        lastQuotaDiscoveryAt: ctx.lastQuotaDiscoveryAt,
+        quotaLimit: ctx.quotaLimit,
+        userPaused: ctx.userPaused,
+      },
+      tasks: {
+        archiveImport: {
+          lastRunAt: ctx.lastImportAt,
+          nextRunAt: ctx.lastImportAt
+            ? Temporal.Instant.from(ctx.lastImportAt)
+                .add({ milliseconds: config.archivePollIntervalMs })
+                .toString()
+            : null,
+          status:
+            snapshot.matches({ active: "reimporting" }) ||
+            snapshot.matches({ starting: "importingArchive" })
+              ? "running"
+              : "idle",
+        },
+        quotaDiscovery: {
+          lastRunAt: ctx.lastQuotaDiscoveryAt,
+          nextRunAt: ctx.lastQuotaDiscoveryAt
+            ? Temporal.Instant.from(ctx.lastQuotaDiscoveryAt).add({ hours: 24 }).toString()
+            : null,
+          status:
+            snapshot.matches({ active: "rediscovering" }) ||
+            snapshot.matches({ starting: "discoveringQuota" })
+              ? "running"
+              : "idle",
+        },
+      },
+    };
+  }
+
+  // Upload function type — both real and dry-run must satisfy this
+  type UploadFn = (
+    clipId: string,
+    onProgress: (bytesTransferred: number, totalBytes: number) => void,
+  ) => Promise<UploadResult>;
+
+  // Dry-run: simulates upload with fake progress over 5-30 seconds
+  // DB writes and event notifications are handled by XState actions, not here
+  const doDryRunUpload: UploadFn = async (_clipId, onProgress) => {
+    const fakeTotal = Math.floor(Math.random() * 10_000_000) + 1_000_000;
+    const fakeDuration = Math.floor(Math.random() * 10_000) + 5_000;
+    const steps = Math.floor(fakeDuration / 1000);
+    const stepMs = Math.floor(fakeDuration / steps);
+
+    await new Promise<void>((done) => {
+      let step = 0;
+      const tick = () => {
+        step++;
+        const bytes = Math.floor((fakeTotal * step) / steps);
+        onProgress(bytes, fakeTotal);
+        if (step >= steps) {
+          done();
+        } else {
+          setTimeout(tick, stepMs);
+        }
+      };
+      setTimeout(tick, stepMs);
+    });
+
+    return { youtubeId: `dry-run-${Date.now().toString(36)}`, durationMs: fakeDuration };
+  };
+
+  // Real upload: calls YouTube API
+  // DB writes and event notifications are handled by XState actions, not here
+  const doRealUpload: UploadFn = async (clipId, _onProgress) => {
+    const youtube = await authManager.getAuthenticatedClient();
+    if (!youtube) {
+      throw { error: "Not authenticated", code: "UNAUTHORIZED" };
+    }
+
+    const twitchClip = await getClipData(clipId);
+    if (!twitchClip) {
+      throw { error: "Clip not found in DB", code: "NOT_FOUND" };
+    }
+
+    try {
+      const startTime = Date.now();
       const result = await uploadClip(
         twitchClip,
         config.archivePath,
@@ -180,207 +282,147 @@ export function createSyncEngine(
         config.uploadCost,
         config.descriptionTemplate,
       );
-
-      clipsRepo.markUploaded(clip.clip_id, result.youtubeId);
-      scheduler.recordUpload();
-      currentUploadClipId = null;
-      eventHandler.onUploadSuccess(clip.clip_id, result.youtubeId);
-      return true;
+      return { youtubeId: result.youtubeId, durationMs: Date.now() - startTime };
     } catch (error) {
-      currentUploadClipId = null;
+      // Convert UploadError to { error, code } shape for the machine
       if (error instanceof UploadError) {
-        if (error.code === "QUOTA_EXCEEDED") {
-          clipsRepo.resetInterrupted();
-          setStatus("paused");
-          pauseReason = "quota";
-          eventHandler.onQuotaExhausted();
-          return false;
-        }
-
-        if (error.code === "UPLOAD_LIMIT_EXCEEDED") {
-          clipsRepo.resetInterrupted();
-          setStatus("paused");
-          pauseReason = "upload-limit";
-          eventHandler.onSyncError("YouTube daily upload limit reached, retrying in 1 hour");
-          return false;
-        }
-
-        clipsRepo.markFailed(clip.clip_id, `${error.code}: ${error.message}`);
-        eventHandler.onUploadFailure(clip.clip_id, error.message);
-        return true; // Continue with next clip
+        throw { error: error.message, code: error.code };
       }
-
-      const message = error instanceof Error ? error.message : String(error);
-      clipsRepo.markFailed(clip.clip_id, message);
-      eventHandler.onUploadFailure(clip.clip_id, message);
-      return true;
+      const msg = error instanceof Error ? error.message : String(error);
+      throw { error: msg, code: "UNKNOWN" };
     }
+  };
+
+  // TypeScript enforces both implementations satisfy UploadFn
+  const doUpload: UploadFn = config.dryRun ? doDryRunUpload : doRealUpload;
+
+  async function getClipData(clipId: string) {
+    const clip = clipsRepo.getClipsPaginated({ search: clipId, pageSize: 1 }).clips[0];
+    if (!clip) return null;
+    return {
+      clipId: clip.clip_id,
+      url: clip.url,
+      embedUrl: clip.embed_url,
+      broadcasterId: clip.broadcaster_id,
+      broadcasterName: clip.broadcaster_name,
+      creatorId: clip.creator_id,
+      creatorName: clip.creator_name,
+      gameId: clip.game_id,
+      language: clip.language ?? "en",
+      title: clip.title,
+      viewCount: clip.view_count,
+      createdAt: clip.created_at,
+      thumbnailUrl: clip.thumbnail_url ?? "",
+      clipArchived: !!clip.clip_archived,
+      thumbnailArchived: !!clip.thumbnail_archived,
+      deletedOnTwitch: !!clip.deleted_on_twitch,
+    };
   }
 
-  async function runLoop(): Promise<void> {
-    if (!running) return;
-
-    try {
-      const processed = await processNextClip();
-
-      if (!processed) {
-        if (status === "paused") {
-          const sleepMs =
-            pauseReason === "upload-limit"
-              ? 60 * 60 * 1000 // 1 hour for upload limit
-              : scheduler.msUntilQuotaReset(); // midnight PT for quota
-          pauseReason = null;
-          loopTimeout = setTimeout(
-            () => {
-              setStatus("running");
-              void runLoop();
-            },
-            Math.min(sleepMs, 60_000),
-          );
-          return;
-        }
-
-        // Nothing to process, check again after a short delay
-        loopTimeout = setTimeout(() => void runLoop(), 30_000);
-        return;
-      }
-
-      // Processed successfully, continue after interval
-      setStatus("running");
-      loopTimeout = setTimeout(() => void runLoop(), config.uploadIntervalMs);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      eventHandler.onSyncError(message);
-      setStatus("error");
-      // Retry after a delay
-      loopTimeout = setTimeout(() => void runLoop(), 60_000);
-    }
-  }
-
-  function startArchivePolling(): void {
-    archivePollTimeout = setInterval(() => {
-      try {
-        importArchive();
-      } catch {
-        // Log but don't crash
-      }
-    }, config.archivePollIntervalMs);
-  }
-
-  async function start(): Promise<void> {
-    if (running) return;
-
-    if (!acquireLock()) {
-      throw new Error("Another instance is already running (engine.lock held by active process)");
-    }
-
-    running = true;
-
-    // Reset interrupted uploads
+  // Public API
+  function start() {
+    // Reset any clips stuck in "uploading" from a previous interrupted run
     clipsRepo.resetInterrupted();
-
-    // Initial archive import
-    importArchive();
-
-    // Check auth
-    if (!authManager.isAuthenticated()) {
-      setStatus("idle");
-      // Will be woken up by notifyAuthComplete()
-    } else if (config.syncMode === "manual") {
-      setStatus("idle");
-      // Manual mode: wait for trigger via API
-    } else {
-      setStatus("running");
-      void runLoop();
+    // Mark ignored clips on every start (catches existing DB entries, not just new imports)
+    if (config.ignoredClipIds.length > 0) {
+      clipsRepo.markIgnored(config.ignoredClipIds);
     }
-
-    startArchivePolling();
+    actor.start();
+    actor.send({ type: "START" });
   }
 
-  function notifyAuthComplete(): void {
-    eventHandler.onAuthComplete();
-    if (status === "idle" && running && config.syncMode !== "manual") {
-      setStatus("running");
-      if (loopTimeout) clearTimeout(loopTimeout);
-      void runLoop();
-    }
+  function stop() {
+    actor.send({ type: "STOP" });
+    actor.stop();
   }
 
-  /** Manually trigger a single upload (for manual sync mode). */
-  async function triggerUpload(): Promise<{ processed: boolean; status: string }> {
-    if (!authManager.isAuthenticated()) {
-      return { processed: false, status: "not authenticated" };
-    }
-    const processed = await processNextClip();
-    return { processed, status: getStatus() };
+  function pause() {
+    actor.send({ type: "PAUSE" });
+    engineStateRepo.setUserPaused(true);
   }
 
-  /** Reset only failed/skipped clips back to pending. */
+  function resume() {
+    actor.send({ type: "RESUME" });
+    engineStateRepo.setUserPaused(false);
+  }
+
+  function notifyAuthComplete() {
+    // Machine automatically transitions to rediscovering after auth
+    actor.send({ type: "AUTH_COMPLETE" });
+  }
+
+  function triggerClip(clipId: string) {
+    actor.send({ type: "TRIGGER_CLIP", clipId });
+  }
+
+  function importNow() {
+    actor.send({ type: "IMPORT_NOW" });
+  }
+
+  function discoverNow() {
+    actor.send({ type: "DISCOVER_NOW" });
+  }
+
+  function notifyClipsChanged() {
+    actor.send({ type: "CLIPS_CHANGED" });
+  }
+
+  function notifyQuotaReset() {
+    actor.send({ type: "QUOTA_RESET" });
+  }
+
   function resetFailedClips(): { reset: number } {
-    return { reset: clipsRepo.resetFailed() };
+    const count = clipsRepo.resetFailed();
+    actor.send({ type: "CLIPS_CHANGED" });
+    return { reset: count };
   }
 
-  /** Reset ALL non-pending clips back to pending (including uploaded). */
   function resetAllClips(): { reset: number } {
-    return { reset: clipsRepo.resetAll() };
+    const count = clipsRepo.resetAll();
+    actor.send({ type: "CLIPS_CHANGED" });
+    return { reset: count };
   }
 
-  async function stop(): Promise<void> {
-    running = false;
-    setStatus("stopped");
-
-    if (loopTimeout) {
-      clearTimeout(loopTimeout);
-      loopTimeout = null;
-    }
-    if (archivePollTimeout) {
-      clearInterval(archivePollTimeout);
-      archivePollTimeout = null;
-    }
-
-    releaseLock();
+  // Debug controls
+  function setDebugFlag(flag: "fail" | "quota" | "uploadLimit", value: boolean) {
+    const eventMap = {
+      fail: "DEBUG_SET_FORCE_FAIL" as const,
+      quota: "DEBUG_SET_FORCE_QUOTA" as const,
+      uploadLimit: "DEBUG_SET_FORCE_UPLOAD_LIMIT" as const,
+    };
+    actor.send({ type: eventMap[flag], value });
   }
 
-  function pause(): void {
-    userPaused = true;
-    if (loopTimeout) {
-      clearTimeout(loopTimeout);
-      loopTimeout = null;
-    }
-    setStatus("paused");
+  function clearDebugFlags() {
+    actor.send({ type: "DEBUG_CLEAR_ALL" });
   }
 
-  function resume(): void {
-    userPaused = false;
-    if (running && authManager.isAuthenticated() && config.syncMode !== "manual") {
-      setStatus("running");
-      void runLoop();
-    }
+  function getState() {
+    return getSnapshot();
   }
 
-  function isPaused(): boolean {
-    return userPaused;
-  }
-
-  function getCurrentUpload(): string | null {
-    return currentUploadClipId;
+  function send(event: SyncEvent) {
+    actor.send(event);
   }
 
   return {
     start,
     stop,
-    getStatus,
-    getSyncMode,
-    notifyAuthComplete,
-    importArchive,
-    triggerUpload,
-    resetFailedClips,
-    resetAllClips,
-    processNextClip,
     pause,
     resume,
-    isPaused,
-    getCurrentUpload,
+    getState,
+    getSnapshot,
+    notifyAuthComplete,
+    triggerClip,
+    importNow,
+    discoverNow,
+    notifyClipsChanged,
+    notifyQuotaReset,
+    resetFailedClips,
+    resetAllClips,
+    setDebugFlag,
+    clearDebugFlags,
+    send,
   };
 }
 

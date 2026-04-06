@@ -220,7 +220,7 @@ describe("getClipsPaginated", () => {
     repo.markUploading("a");
     repo.markUploaded("a", "yt-1");
 
-    const result = repo.getClipsPaginated({ status: "uploaded" });
+    const result = repo.getClipsPaginated({ statuses: ["uploaded"] });
     expect(result.clips).toHaveLength(1);
     expect(result.clips[0].clip_id).toBe("a");
   });

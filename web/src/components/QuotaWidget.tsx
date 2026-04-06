@@ -19,22 +19,22 @@ export function QuotaWidget({
   const pct = quota.limit > 0 ? Math.min(100, (quota.used / quota.limit) * 100) : 0;
 
   return (
-    <div className="rounded-lg bg-white p-4 shadow-sm">
+    <div className="rounded-lg bg-white p-4 shadow-sm dark:bg-gray-800">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="font-medium text-gray-700">Daily Quota</h3>
-        <span className="text-xs text-gray-400">
+        <h3 className="font-medium text-gray-700 dark:text-gray-200">Daily Quota</h3>
+        <span className="text-xs text-gray-400 dark:text-gray-500">
           {quota.limitSource === "google-api" ? "from Google API" : "from config"}
         </span>
       </div>
 
-      <div className="mb-2 h-3 w-full rounded-full bg-gray-200">
+      <div className="mb-2 h-3 w-full rounded-full bg-gray-200 dark:bg-gray-700">
         <div
           className={`h-3 rounded-full transition-all ${pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-yellow-500" : "bg-green-500"}`}
           style={{ width: `${pct}%` }}
         />
       </div>
 
-      <div className="flex justify-between text-sm text-gray-600">
+      <div className="flex justify-between text-sm text-gray-600 dark:text-gray-300">
         <span>
           {quota.uploadsToday}/{maxUploads} clips ({quota.used.toLocaleString()}/
           {quota.limit.toLocaleString()} units)
@@ -43,7 +43,7 @@ export function QuotaWidget({
       </div>
 
       {estimated.daysRemaining > 0 && (
-        <div className="mt-2 text-sm text-gray-500">
+        <div className="mt-2 text-sm text-gray-500 dark:text-gray-400">
           ~{estimated.daysRemaining} days remaining
           {estimated.estimatedDate && ` (est. ${estimated.estimatedDate})`}
         </div>

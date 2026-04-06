@@ -7,6 +7,7 @@ import { cors } from "hono/cors";
 
 import type { Config } from "#server/config.js";
 import type { ClipsRepository } from "#server/db/repositories/clips.js";
+import type { EngineLogRepository } from "#server/db/repositories/engine-log.js";
 import type { SyncEngine } from "#server/sync/engine.js";
 import type { Scheduler } from "#server/sync/scheduler.js";
 import type { AuthManager } from "#server/youtube/auth.js";
@@ -14,6 +15,7 @@ import type { AuthManager } from "#server/youtube/auth.js";
 import { createClipsRoutes } from "./routes/clips.js";
 import { createEngineRoutes } from "./routes/engine.js";
 import { createEventsRoutes } from "./routes/events.js";
+import { createLogsRoutes } from "./routes/logs.js";
 import { createOAuthRoutes } from "./routes/oauth.js";
 import { createStatsRoutes } from "./routes/stats.js";
 
@@ -24,6 +26,7 @@ export function createApp(
   engine: SyncEngine,
   authManager: AuthManager,
   sseManager: SSEManager,
+  logRepo: EngineLogRepository,
 ) {
   const app = new Hono();
 
@@ -32,14 +35,17 @@ export function createApp(
     app.use("/api/*", cors());
   }
 
-  // Health check (no auth)
+  // Health check (no auth, enriched)
   app.get("/health", (c) => {
+    const snapshot = engine.getSnapshot();
     return c.json({
       status: "ok",
-      engine: engine.getStatus(),
-      db: true,
+      engine: snapshot.state,
       oauth: authManager.isAuthenticated(),
       uptime: process.uptime(),
+      lastImport: snapshot.context.lastImportAt,
+      clipsImported: snapshot.context.clipsImported,
+      quotaLimit: snapshot.context.quotaLimit,
     });
   });
 
@@ -61,6 +67,7 @@ export function createApp(
   app.route("/api", createClipsRoutes(clipsRepo));
   app.route("/api", createOAuthRoutes(authManager, engine));
   app.route("/api", createEngineRoutes(engine, authManager, config));
+  app.route("/api", createLogsRoutes(logRepo));
   app.route("/api", createEventsRoutes(sseManager));
 
   // Serve static frontend in production

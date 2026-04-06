@@ -44,10 +44,11 @@ export interface ClipStats {
   uploaded: number;
   failed: number;
   skipped: number;
+  ignored: number;
 }
 
 export interface ClipFilters {
-  status?: string;
+  statuses?: string[];
   search?: string;
   sortBy?: "created_at" | "title" | "sync_status";
   sortOrder?: "asc" | "desc";
@@ -196,6 +197,7 @@ export function createClipsRepository(db: Database.Database) {
       uploaded: 0,
       failed: 0,
       skipped: 0,
+      ignored: 0,
     };
 
     for (const row of rows) {
@@ -205,6 +207,7 @@ export function createClipsRepository(db: Database.Database) {
         case "uploaded":
         case "failed":
         case "skipped":
+        case "ignored":
           stats[row.sync_status] = row.count;
           break;
       }
@@ -216,7 +219,7 @@ export function createClipsRepository(db: Database.Database) {
 
   function getClipsPaginated(filters: ClipFilters = {}): PaginatedClips {
     const {
-      status,
+      statuses,
       search,
       sortBy = "created_at",
       sortOrder = "asc",
@@ -227,9 +230,23 @@ export function createClipsRepository(db: Database.Database) {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
-    if (status && status !== "all") {
-      conditions.push("sync_status = ?");
-      params.push(status);
+    if (statuses && statuses.length > 0) {
+      // Validate statuses against known values to prevent any unexpected input
+      const validStatuses = new Set([
+        "pending",
+        "uploading",
+        "uploaded",
+        "failed",
+        "skipped",
+        "ignored",
+      ]);
+      const filtered = statuses.filter((s) => validStatuses.has(s));
+      if (filtered.length > 0) {
+        // Safe: placeholders are generated from array length, values are bound as parameters
+        const placeholders = filtered.map(() => "?").join(", ");
+        conditions.push(`sync_status IN (${placeholders})`);
+        params.push(...filtered);
+      }
     }
 
     if (search) {
@@ -307,10 +324,22 @@ export function createClipsRepository(db: Database.Database) {
   function resetAll(): number {
     const result = db
       .prepare(
-        "UPDATE clips SET sync_status = 'pending', youtube_id = NULL, uploaded_at = NULL, last_error = NULL, retry_count = 0, updated_at = datetime('now') WHERE sync_status != 'pending'",
+        "UPDATE clips SET sync_status = 'pending', youtube_id = NULL, uploaded_at = NULL, last_error = NULL, retry_count = 0, updated_at = datetime('now') WHERE sync_status NOT IN ('pending', 'ignored')",
       )
       .run();
     return result.changes;
+  }
+
+  function markIgnored(clipIds: string[]): number {
+    if (clipIds.length === 0) return 0;
+    const stmt = db.prepare(
+      "UPDATE clips SET sync_status = 'ignored', updated_at = datetime('now') WHERE clip_id = ? AND sync_status != 'ignored'",
+    );
+    let count = 0;
+    for (const id of clipIds) {
+      count += stmt.run(id).changes;
+    }
+    return count;
   }
 
   return {
@@ -321,6 +350,7 @@ export function createClipsRepository(db: Database.Database) {
     markUploaded,
     markFailed,
     markSkipped,
+    markIgnored,
     resetInterrupted,
     resetClip,
     resetFailed,

@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { SyncModeSchema } from "#shared/schemas.js";
 import { config as loadDotenv } from "dotenv";
 
 loadDotenv();
@@ -49,10 +48,16 @@ export function loadConfig() {
     throw new Error(`ARCHIVE_PATH missing media/clips/ directory: ${archivePath}`);
   }
 
+  const dryRun = optionalBool("DRY_RUN", false);
+
   return {
-    googleClientId: required("GOOGLE_CLIENT_ID"),
-    googleClientSecret: required("GOOGLE_CLIENT_SECRET"),
-    oauthRedirectBase: required("OAUTH_REDIRECT_BASE"),
+    googleClientId: dryRun ? optional("GOOGLE_CLIENT_ID", "") : required("GOOGLE_CLIENT_ID"),
+    googleClientSecret: dryRun
+      ? optional("GOOGLE_CLIENT_SECRET", "")
+      : required("GOOGLE_CLIENT_SECRET"),
+    oauthRedirectBase: dryRun
+      ? optional("OAUTH_REDIRECT_BASE", `http://localhost:${optionalInt("PORT", 3000)}`)
+      : required("OAUTH_REDIRECT_BASE"),
     archivePath,
     dataPath,
     port: optionalInt("PORT", 3000),
@@ -62,12 +67,15 @@ export function loadConfig() {
     archivePollIntervalMs: optionalInt("ARCHIVE_POLL_INTERVAL_MS", 900000),
     maxRetryCount: optionalInt("MAX_RETRY_COUNT", 3),
     logLevel: optional("LOG_LEVEL", "info"),
-    dryRun: optionalBool("DRY_RUN", false),
-    syncMode: SyncModeSchema.catch("auto").parse(process.env["SYNC_MODE"]),
+    dryRun,
     googleProjectNumber: process.env["GOOGLE_PROJECT_NUMBER"] ?? null,
     descriptionTemplate: process.env["DESCRIPTION_TEMPLATE"]?.replaceAll("\\n", "\n") ?? null,
     adminPassword: process.env["ADMIN_PASSWORD"] ?? null,
     webhookUrl: process.env["WEBHOOK_URL"] ?? null,
+    ignoredClipIds: optional("IGNORED_CLIP_IDS", "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
     webhookEvents: optional("WEBHOOK_EVENTS", "upload:success,quota:exhausted")
       .split(",")
       .map((s) => s.trim()),

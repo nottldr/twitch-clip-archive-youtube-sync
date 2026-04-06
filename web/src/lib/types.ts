@@ -1,6 +1,35 @@
-import { SyncModeSchema } from "#shared/schemas.js";
+import {
+  EngineSnapshotSchema,
+  EngineStatePathSchema,
+  LogEntrySchema,
+  LogEntryTypeSchema,
+  PaginatedLogsSchema,
+  UploadProgressSchema,
+  WaitReasonSchema,
+} from "#shared/schemas.js";
 import { z } from "zod/v4";
 
+// Re-export shared schemas
+export {
+  EngineSnapshotSchema,
+  EngineStatePathSchema,
+  LogEntrySchema,
+  LogEntryTypeSchema,
+  PaginatedLogsSchema,
+  UploadProgressSchema,
+  WaitReasonSchema,
+};
+
+// Re-export shared types
+export type {
+  EngineSnapshot,
+  EngineStatePath,
+  LogEntry,
+  UploadProgress,
+  WaitReason,
+} from "#shared/schemas.js";
+
+// Clip stats
 export const ClipStatsSchema = z.object({
   total: z.number(),
   pending: z.number(),
@@ -8,6 +37,7 @@ export const ClipStatsSchema = z.object({
   uploaded: z.number(),
   failed: z.number(),
   skipped: z.number(),
+  ignored: z.number(),
 });
 
 export const QuotaUsageSchema = z.object({
@@ -33,12 +63,7 @@ export const EstimatedCompletionSchema = z.object({
 export const DashboardStatsSchema = z.object({
   clips: ClipStatsSchema,
   quota: QuotaUsageSchema,
-  engine: z.object({
-    status: z.string(),
-    syncMode: SyncModeSchema,
-    paused: z.boolean(),
-    currentUpload: z.string().nullable(),
-  }),
+  engine: EngineSnapshotSchema,
   estimated: EstimatedCompletionSchema,
 });
 
@@ -81,11 +106,9 @@ export const ActivityItemSchema = z.object({
 
 export const RecentActivitySchema = z.array(ActivityItemSchema);
 
-export type ActivityItem = z.infer<typeof ActivityItemSchema>;
-
 export const QuotaHistorySchema = z.array(QuotaHistoryEntrySchema);
 
-// Inferred types for use in components
+// Inferred types
 export type ClipStats = z.infer<typeof ClipStatsSchema>;
 export type QuotaUsage = z.infer<typeof QuotaUsageSchema>;
 export type QuotaHistoryEntry = z.infer<typeof QuotaHistoryEntrySchema>;
@@ -93,9 +116,9 @@ export type EstimatedCompletion = z.infer<typeof EstimatedCompletionSchema>;
 export type DashboardStats = z.infer<typeof DashboardStatsSchema>;
 export type ClipRow = z.infer<typeof ClipRowSchema>;
 export type PaginatedClips = z.infer<typeof PaginatedClipsSchema>;
+export type ActivityItem = z.infer<typeof ActivityItemSchema>;
 
-// SSE event discriminated unions
-
+// SSE events — now using the engine state snapshot
 const UploadSuccessEventSchema = z.object({
   type: z.literal("upload:success"),
   clipId: z.string(),
@@ -108,34 +131,29 @@ const UploadFailureEventSchema = z.object({
   error: z.string(),
 });
 
-const QuotaExhaustedEventSchema = z.object({
-  type: z.literal("quota:exhausted"),
+const EngineStateEventSchema = z.object({
+  type: z.literal("engine:state"),
+  // The full snapshot is broadcast as the event data
 });
 
-const SyncStatusEventSchema = z.object({
-  type: z.literal("sync:status"),
-  status: z.string(),
-});
-
-const SyncErrorEventSchema = z.object({
-  type: z.literal("sync:error"),
-  error: z.string(),
+const UploadProgressEventSchema = z.object({
+  type: z.literal("engine:upload-progress"),
+  clipId: z.string(),
+  bytesTransferred: z.number(),
+  totalBytes: z.number(),
 });
 
 export const SSEEventSchema = z.discriminatedUnion("type", [
   UploadSuccessEventSchema,
   UploadFailureEventSchema,
-  QuotaExhaustedEventSchema,
-  SyncStatusEventSchema,
-  SyncErrorEventSchema,
+  EngineStateEventSchema,
+  UploadProgressEventSchema,
 ]);
 
 export type SSEEvent = z.infer<typeof SSEEventSchema>;
 
-/** Events that should trigger a data refetch. */
-export const REFETCH_EVENT_TYPES = new Set<SSEEvent["type"]>([
+export const REFETCH_EVENT_TYPES = new Set<string>([
   "upload:success",
   "upload:failure",
-  "quota:exhausted",
-  "sync:status",
+  "engine:state",
 ]);

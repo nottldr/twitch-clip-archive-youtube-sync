@@ -17,8 +17,11 @@ export function createClipsRoutes(clipsRepo: ClipsRepository) {
     const page = Number.parseInt(c.req.query("page") ?? "1", 10);
     const pageSize = Number.parseInt(c.req.query("pageSize") ?? "50", 10);
 
+    // Support comma-separated statuses: ?status=failed,uploading
+    const statuses = status?.split(",").filter(Boolean);
+
     const result = clipsRepo.getClipsPaginated({
-      status,
+      statuses,
       search,
       sortBy: sortBy.success ? sortBy.data : undefined,
       sortOrder: sortOrder.success ? sortOrder.data : undefined,

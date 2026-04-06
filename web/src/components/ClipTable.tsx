@@ -78,7 +78,7 @@ function getColumns(onReset: (clipId: string) => void) {
             onClick={() => {
               onReset(info.row.original.clip_id);
             }}
-            className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+            className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
             title="Reset to pending"
           >
             Reset
@@ -130,7 +130,10 @@ export function ClipTable({
         <table className="w-full text-sm">
           <thead>
             {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id} className="border-b text-left text-gray-500">
+              <tr
+                key={headerGroup.id}
+                className="border-b text-left text-gray-500 dark:border-gray-700 dark:text-gray-400"
+              >
                 {headerGroup.headers.map((header) => {
                   const hideBelow = header.column.columnDef.meta?.hideBelow;
                   const hideCls = hideBelow ? HIDE_CLASSES[hideBelow] : "";
@@ -157,7 +160,10 @@ export function ClipTable({
           </thead>
           <tbody>
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="border-b hover:bg-gray-50">
+              <tr
+                key={row.id}
+                className="border-b hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
+              >
                 {row.getVisibleCells().map((cell) => {
                   const hideBelow = cell.column.columnDef.meta?.hideBelow;
                   const hideCls = hideBelow ? HIDE_CLASSES[hideBelow] : "";
@@ -175,7 +181,7 @@ export function ClipTable({
       </div>
 
       {data.totalPages > 1 && (
-        <div className="mt-4 flex items-center justify-between px-3 text-sm text-gray-600">
+        <div className="mt-4 flex items-center justify-between px-3 text-sm text-gray-600 dark:text-gray-300">
           <span>
             {data.page}/{data.totalPages} ({data.total})
           </span>
@@ -185,7 +191,7 @@ export function ClipTable({
               onClick={() => {
                 onPageChange(data.page - 1);
               }}
-              className="rounded border px-3 py-1 hover:bg-gray-50 disabled:opacity-30"
+              className="rounded border px-3 py-1 hover:bg-gray-50 disabled:opacity-30 dark:border-gray-700 dark:hover:bg-gray-700"
             >
               Prev
             </button>
@@ -194,7 +200,7 @@ export function ClipTable({
               onClick={() => {
                 onPageChange(data.page + 1);
               }}
-              className="rounded border px-3 py-1 hover:bg-gray-50 disabled:opacity-30"
+              className="rounded border px-3 py-1 hover:bg-gray-50 disabled:opacity-30 dark:border-gray-700 dark:hover:bg-gray-700"
             >
               Next
             </button>

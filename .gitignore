@@ -10,3 +10,6 @@ data/engine.lock
 
 # Generated fixture media (regenerate with pnpm fixtures:generate)
 fixtures/archive/media/
+
+# Generated test tmp directory
+**/__tests__/.tmp-engine-**/*

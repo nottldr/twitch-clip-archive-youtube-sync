@@ -1,15 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 
-import { ActivityFeed } from "#web/components/ActivityFeed.js";
+import { EngineStateIndicator } from "#web/components/EngineStateIndicator.js";
 import { OAuthButton } from "#web/components/OAuthButton.js";
-import { StatusBadge } from "#web/components/StatusBadge.js";
 import { fetchJson } from "#web/lib/api.js";
 import { SSEProvider, useSSEContext } from "#web/lib/sse-context.js";
 import { DashboardStatsSchema, OAuthStatusSchema } from "#web/lib/types.js";
 
 import { Clips } from "./pages/Clips.js";
 import { Dashboard } from "./pages/Dashboard.js";
+import { Debug } from "./pages/Debug.js";
+import { Logs } from "./pages/Logs.js";
 
 function Layout() {
   const queryClient = useQueryClient();
@@ -24,74 +25,65 @@ function Layout() {
     queryFn: () => fetchJson("/api/oauth/status", OAuthStatusSchema),
   });
 
-  const { connected, recentActivity } = useSSEContext();
+  const { connected } = useSSEContext();
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `px-3 py-1 rounded text-sm ${isActive ? "bg-gray-200 font-medium" : "hover:bg-gray-100"}`;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="flex flex-wrap items-center gap-3 border-b bg-white px-4 py-3 sm:gap-4 sm:px-6">
-        <span className="font-bold text-gray-800 sm:mr-4">twitch-clip-archive-youtube-sync</span>
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 dark:text-gray-100">
+      <nav className="flex flex-wrap items-center gap-3 border-b bg-white px-4 py-3 sm:gap-4 sm:px-6 dark:border-gray-700 dark:bg-gray-800">
+        <span className="font-bold text-gray-800 sm:mr-4 dark:text-gray-100">
+          twitch-clip-archive-youtube-sync
+        </span>
         <NavLink to="/" className={linkClass} end>
           Dashboard
         </NavLink>
         <NavLink to="/clips" className={linkClass}>
           Clips
         </NavLink>
+        <NavLink to="/logs" className={linkClass}>
+          Logs
+        </NavLink>
+        <NavLink to="/debug" className={linkClass}>
+          Debug
+        </NavLink>
         <div className="ml-auto flex items-center gap-3">
-          {stats && <StatusBadge status={stats.engine.status} />}
-          {stats?.engine.currentUpload && (
-            <span
-              className="max-w-[10rem] truncate text-xs text-gray-400"
-              title={stats.engine.currentUpload}
-            >
-              uploading...
-            </span>
-          )}
-          {stats && stats.engine.syncMode === "auto" && (
+          {stats && <EngineStateIndicator snapshot={stats.engine} />}
+          {stats && stats.engine.state === "active.blocked.userPaused" && (
             <button
               onClick={() => {
-                const action = stats.engine.paused ? "resume" : "pause";
-                void fetch(`/api/engine/${action}`, { method: "POST" }).then(() => {
+                void fetch("/api/engine/resume", { method: "POST" }).then(() => {
                   void queryClient.invalidateQueries({ queryKey: ["stats"] });
                 });
               }}
-              className={`rounded border px-2 py-1 text-xs ${
-                stats.engine.paused
-                  ? "border-green-300 text-green-600 hover:bg-green-50"
-                  : "hover:bg-gray-50"
-              }`}
+              className="rounded border border-green-300 px-2 py-1 text-xs text-green-600 hover:bg-green-50"
             >
-              {stats.engine.paused ? "Resume" : "Pause"}
+              Resume
             </button>
           )}
-          {stats?.engine.syncMode === "manual" && (
-            <>
+          {stats &&
+            stats.engine.state.startsWith("active.") &&
+            stats.engine.state !== "active.blocked.userPaused" &&
+            (stats.engine.context.userPaused ? (
+              <button
+                disabled
+                className="rounded border border-orange-300 px-2 py-1 text-xs text-orange-500"
+              >
+                Pausing…
+              </button>
+            ) : (
               <button
                 onClick={() => {
-                  void fetch("/api/engine/trigger", { method: "POST" });
+                  void fetch("/api/engine/pause", { method: "POST" }).then(() => {
+                    void queryClient.invalidateQueries({ queryKey: ["stats"] });
+                  });
                 }}
                 className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
-                title="Upload the next pending clip"
               >
-                Trigger
+                Pause
               </button>
-              <button
-                onClick={() => {
-                  if (window.confirm("Reset failed/skipped clips to pending?")) {
-                    void fetch("/api/engine/reset-failed", { method: "POST" }).then(() => {
-                      void queryClient.invalidateQueries();
-                    });
-                  }
-                }}
-                className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-                title="Reset failed/skipped clips to pending"
-              >
-                Reset
-              </button>
-            </>
-          )}
+            ))}
           {connected && (
             <span
               className="inline-block h-2 w-2 rounded-full bg-green-500"
@@ -106,19 +98,14 @@ function Layout() {
           />
         </div>
       </nav>
-      <div className="mx-auto max-w-6xl p-4 sm:p-6">
-        <div className="flex flex-col gap-6 lg:flex-row">
-          <main className="min-w-0 flex-1">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/clips" element={<Clips />} />
-            </Routes>
-          </main>
-          <aside className="lg:w-80 lg:shrink-0">
-            <ActivityFeed items={recentActivity} />
-          </aside>
-        </div>
-      </div>
+      <main className="mx-auto max-w-6xl p-4 sm:p-6">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/clips" element={<Clips />} />
+          <Route path="/logs" element={<Logs />} />
+          <Route path="/debug" element={<Debug />} />
+        </Routes>
+      </main>
     </div>
   );
 }
