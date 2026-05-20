@@ -3,8 +3,22 @@ import type Database from "better-sqlite3";
 import { z } from "zod/v4";
 
 import type { TwitchClip } from "#server/archive/types.js";
+import { createLogger } from "#server/logger.js";
 
-import { parseRow, parseRows } from "../parse.js";
+import { parseRow, parseRows, parseRowsLenient } from "../parse.js";
+
+const logger = createLogger("clips-repo");
+
+export const SyncStatusSchema = z.enum([
+  "pending",
+  "uploading",
+  "uploaded",
+  "failed",
+  "skipped",
+  "ignored",
+]);
+
+export type SyncStatus = z.infer<typeof SyncStatusSchema>;
 
 export const ClipRowSchema = z.object({
   clip_id: z.string(),
@@ -23,7 +37,7 @@ export const ClipRowSchema = z.object({
   clip_archived: z.number(),
   thumbnail_archived: z.number(),
   deleted_on_twitch: z.number(),
-  sync_status: z.string(),
+  sync_status: SyncStatusSchema,
   youtube_id: z.string().nullable(),
   uploaded_at: z.string().nullable(),
   last_error: z.string().nullable(),
@@ -175,13 +189,50 @@ export function createClipsRepository(db: Database.Database) {
     ).run(reason, clipId);
   }
 
-  function resetInterrupted(): number {
-    const result = db
+  /**
+   * Recover from an interrupted upload run.
+   *
+   * - Rows stuck in `uploading` with no `youtube_id` → reset to `pending` (the upload never started or never returned).
+   * - Rows stuck in `uploading` *with* `youtube_id` set → promote to `uploaded` (the upload succeeded but
+   *   the markUploaded write didn't land before the crash). Resetting these would cause a duplicate YouTube upload.
+   *
+   * Both steps run in one transaction so a partial recovery can't leave the DB worse off than it started.
+   * Returns `{ reset, promoted }` counts for callers to log.
+   */
+  const _resetInterruptedTx = db.transaction((): { reset: number; promoted: number } => {
+    const promotedResult = db
       .prepare(
-        "UPDATE clips SET sync_status = 'pending', updated_at = datetime('now') WHERE sync_status = 'uploading'",
+        `UPDATE clips
+         SET sync_status = 'uploaded',
+             uploaded_at = COALESCE(uploaded_at, datetime('now')),
+             updated_at  = datetime('now')
+         WHERE sync_status = 'uploading' AND youtube_id IS NOT NULL`,
       )
       .run();
-    return result.changes;
+
+    const resetResult = db
+      .prepare(
+        `UPDATE clips
+         SET sync_status = 'pending', updated_at = datetime('now')
+         WHERE sync_status = 'uploading' AND youtube_id IS NULL`,
+      )
+      .run();
+
+    return { reset: resetResult.changes, promoted: promotedResult.changes };
+  });
+
+  function resetInterrupted(): { reset: number; promoted: number } {
+    const result = _resetInterruptedTx();
+    if (result.promoted > 0) {
+      logger.warn(
+        { promoted: result.promoted },
+        "Recovered orphaned 'uploading' rows with a youtube_id by promoting to 'uploaded'",
+      );
+    }
+    if (result.reset > 0) {
+      logger.info({ reset: result.reset }, "Reset interrupted 'uploading' rows back to 'pending'");
+    }
+    return result;
   }
 
   function getStats(): ClipStats {
@@ -265,11 +316,12 @@ export function createClipsRepository(db: Database.Database) {
     );
 
     const offset = (page - 1) * pageSize;
-    const clips = parseRows(
+    const clips = parseRowsLenient(
       ClipRowSchema,
       db
         .prepare(`SELECT * FROM clips ${where} ORDER BY ${sort} ${order} LIMIT ? OFFSET ?`)
         .all(...params, pageSize, offset),
+      "clips.getClipsPaginated",
     );
 
     return {
@@ -282,24 +334,26 @@ export function createClipsRepository(db: Database.Database) {
   }
 
   function getFailedForRetry(maxRetries: number): ClipRow[] {
-    return parseRows(
+    return parseRowsLenient(
       ClipRowSchema,
       db
         .prepare(
           "SELECT * FROM clips WHERE sync_status = 'failed' AND retry_count < ? ORDER BY created_at ASC",
         )
         .all(maxRetries),
+      "clips.getFailedForRetry",
     );
   }
 
   function getRecentActivity(limit: number = 10): ClipRow[] {
-    return parseRows(
+    return parseRowsLenient(
       ClipRowSchema,
       db
         .prepare(
           "SELECT * FROM clips WHERE sync_status IN ('uploaded', 'failed', 'skipped') ORDER BY updated_at DESC LIMIT ?",
         )
         .all(limit),
+      "clips.getRecentActivity",
     );
   }
 

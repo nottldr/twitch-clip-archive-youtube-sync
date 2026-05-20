@@ -6,7 +6,6 @@ import { resolve } from "node:path";
 import { z } from "zod/v4";
 
 import type { TwitchClip } from "#server/archive/types.js";
-import type { UploadsRepository } from "#server/db/repositories/uploads.js";
 
 import { buildVideoMetadata } from "./metadata.js";
 
@@ -25,12 +24,22 @@ export interface UploadResult {
   youtubeId: string;
 }
 
+/**
+ * Upload a single clip to YouTube. Pure I/O — does NOT write to the DB.
+ *
+ * The caller (engine.ts) owns the attempt row lifecycle:
+ *   1. `uploadsRepo.logAttempt(clipId, cost)` BEFORE calling this
+ *   2. `uploadsRepo.recordSuccess(...)` (atomic) on success
+ *   3. `uploadsRepo.recordFailure(...)` (atomic) on failure
+ *
+ * Splitting these out keeps the YouTube I/O concern separate from the DB
+ * transaction concern. Previously this function wrote three DB rows itself,
+ * making mid-flight crashes corrupt-prone.
+ */
 export async function uploadClip(
   clip: TwitchClip,
   archivePath: string,
   youtube: youtube_v3.Youtube,
-  uploadsRepo: UploadsRepository,
-  uploadCost: number,
   descriptionTemplate?: string | null,
 ): Promise<UploadResult> {
   const mp4Path = resolve(archivePath, "media/clips", `${clip.clipId}.mp4`);
@@ -48,7 +57,6 @@ export async function uploadClip(
   }
 
   const metadata = buildVideoMetadata(clip, descriptionTemplate ?? undefined);
-  const attemptId = uploadsRepo.logAttempt(clip.clipId, uploadCost);
 
   try {
     const response = await youtube.videos.insert({
@@ -64,12 +72,9 @@ export async function uploadClip(
       throw new UploadError("YouTube returned no video ID", "NO_VIDEO_ID", true);
     }
 
-    uploadsRepo.completeAttempt(attemptId, true, youtubeId);
     return { youtubeId };
   } catch (error: unknown) {
-    const classified = classifyError(error);
-    uploadsRepo.completeAttempt(attemptId, false, undefined, classified.message, classified.code);
-    throw classified;
+    throw classifyError(error);
   }
 }
 

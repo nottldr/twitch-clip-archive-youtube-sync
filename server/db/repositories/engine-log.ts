@@ -2,12 +2,16 @@ import type Database from "better-sqlite3";
 
 import { z } from "zod/v4";
 
-import { parseRows } from "../parse.js";
+import { parseRowsLenient } from "../parse.js";
+
+export const LogTypeSchema = z.enum(["state_change", "upload", "error"]);
+
+export type LogType = z.infer<typeof LogTypeSchema>;
 
 const LogRowSchema = z.object({
   id: z.number(),
   timestamp: z.string(),
-  type: z.string(),
+  type: LogTypeSchema,
   from_state: z.string().nullable(),
   to_state: z.string().nullable(),
   event: z.string().nullable(),
@@ -28,7 +32,7 @@ export function createEngineLogRepository(db: Database.Database) {
   `);
 
   function insert(entry: {
-    type: "state_change" | "upload" | "error";
+    type: LogType;
     fromState?: string | null;
     toState?: string | null;
     event?: string | null;
@@ -72,7 +76,7 @@ export function createEngineLogRepository(db: Database.Database) {
     const sql = `SELECT * FROM engine_log ${where} ORDER BY id DESC LIMIT ?`;
     params.push(limit + 1); // fetch one extra to check hasMore
 
-    const rows = parseRows(LogRowSchema, db.prepare(sql).all(...params));
+    const rows = parseRowsLenient(LogRowSchema, db.prepare(sql).all(...params), "engineLog.query");
     const hasMore = rows.length > limit;
     const entries = hasMore ? rows.slice(0, limit) : rows;
 

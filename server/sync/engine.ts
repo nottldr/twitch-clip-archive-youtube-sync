@@ -55,7 +55,9 @@ export function createSyncEngine(
     initialUserPaused: engineStateRepo.isUserPaused(),
 
     async importArchive() {
-      const clips = readLatestDump(config.archivePath);
+      const clips = readLatestDump(config.archivePath, {
+        legacyMinAgeMs: config.readerLegacyFreshnessMs,
+      });
       if (clips.length === 0) return 0;
       const imported = clipsRepo.upsertFromArchive(clips);
       if (config.ignoredClipIds.length > 0) {
@@ -77,23 +79,25 @@ export function createSyncEngine(
       return doUpload(clipId, onProgress);
     },
 
-    // Side effects (called by XState actions on transitions)
+    // Side effects (called by XState actions on transitions). DB writes for
+    // success/failure happen inside doUpload() above and are atomic — the
+    // callbacks below are now log-only / system-state-only.
     onClipUploading(clipId) {
       clipsRepo.markUploading(clipId);
       logger.info({ clipId }, "Clip uploading");
     },
     onClipUploaded(clipId, youtubeId) {
-      clipsRepo.markUploaded(clipId, youtubeId);
       logger.info({ clipId, youtubeId }, "Upload success");
     },
     onClipFailed(clipId, error, code) {
-      clipsRepo.markFailed(clipId, `${code}: ${error}`);
       logger.warn({ clipId, error, code }, "Upload failure");
     },
     onQuotaRecorded() {
-      scheduler.recordUpload();
+      // Quota was already recorded atomically with the upload write — no-op.
     },
     onQuotaLimitExceeded() {
+      // Reset the in-flight 'uploading' clip back to 'pending' so it'll be
+      // retried after the quota window clears.
       clipsRepo.resetInterrupted();
     },
 
@@ -227,15 +231,15 @@ export function createSyncEngine(
     };
   }
 
-  // Upload function type — both real and dry-run must satisfy this
-  type UploadFn = (
+  // Inner upload functions return the YouTube ID + timing. They do NOT touch
+  // the DB — the outer `doUpload` wrapper owns the attempt-row lifecycle and
+  // commits the final state atomically via uploadsRepo.recordSuccess / recordFailure.
+  type InnerUploadFn = (
     clipId: string,
     onProgress: (bytesTransferred: number, totalBytes: number) => void,
   ) => Promise<UploadResult>;
 
-  // Dry-run: simulates upload with fake progress over 5-30 seconds
-  // DB writes and event notifications are handled by XState actions, not here
-  const doDryRunUpload: UploadFn = async (_clipId, onProgress) => {
+  const doDryRunInner: InnerUploadFn = async (_clipId, onProgress) => {
     const fakeTotal = Math.floor(Math.random() * 10_000_000) + 1_000_000;
     const fakeDuration = Math.floor(Math.random() * 10_000) + 5_000;
     const steps = Math.floor(fakeDuration / 1000);
@@ -259,42 +263,68 @@ export function createSyncEngine(
     return { youtubeId: `dry-run-${Date.now().toString(36)}`, durationMs: fakeDuration };
   };
 
-  // Real upload: calls YouTube API
-  // DB writes and event notifications are handled by XState actions, not here
-  const doRealUpload: UploadFn = async (clipId, _onProgress) => {
+  const doRealInner: InnerUploadFn = async (clipId, _onProgress) => {
     const youtube = await authManager.getAuthenticatedClient();
     if (!youtube) {
-      throw { error: "Not authenticated", code: "UNAUTHORIZED" };
+      throw new UploadError("Not authenticated", "UNAUTHORIZED", true);
     }
 
     const twitchClip = await getClipData(clipId);
     if (!twitchClip) {
-      throw { error: "Clip not found in DB", code: "NOT_FOUND" };
+      throw new UploadError("Clip not found in DB", "NOT_FOUND", false);
     }
 
-    try {
-      const startTime = Date.now();
-      const result = await uploadClip(
-        twitchClip,
-        config.archivePath,
-        youtube,
-        uploadsRepo,
-        config.uploadCost,
-        config.descriptionTemplate,
-      );
-      return { youtubeId: result.youtubeId, durationMs: Date.now() - startTime };
-    } catch (error) {
-      // Convert UploadError to { error, code } shape for the machine
-      if (error instanceof UploadError) {
-        throw { error: error.message, code: error.code };
-      }
-      const msg = error instanceof Error ? error.message : String(error);
-      throw { error: msg, code: "UNKNOWN" };
-    }
+    const startTime = Date.now();
+    const result = await uploadClip(
+      twitchClip,
+      config.archivePath,
+      youtube,
+      config.descriptionTemplate,
+    );
+    return { youtubeId: result.youtubeId, durationMs: Date.now() - startTime };
   };
 
-  // TypeScript enforces both implementations satisfy UploadFn
-  const doUpload: UploadFn = config.dryRun ? doDryRunUpload : doRealUpload;
+  const innerUpload: InnerUploadFn = config.dryRun ? doDryRunInner : doRealInner;
+
+  // Owns the attempt-row lifecycle: logAttempt at the start; recordSuccess or
+  // recordFailure on completion. Both finalize calls are atomic across all three
+  // affected tables (upload_attempts, clips, quota_usage), preventing the
+  // pre-refactor failure mode where a mid-flight crash could leave the DB with
+  // a YouTube upload that wasn't recorded (causing duplicate uploads on restart).
+  //
+  // System-state failures (quota / upload-limit / auth) don't fault the clip:
+  // the machine pauses and the clip is reset to 'pending' on the next cycle.
+  // Per-clip failures (file errors, server errors, policy rejections, network)
+  // do mark the clip 'failed' and increment retry_count.
+  const SYSTEM_FAILURE_CODES = new Set(["QUOTA_EXCEEDED", "UPLOAD_LIMIT_EXCEEDED", "UNAUTHORIZED"]);
+
+  const doUpload: InnerUploadFn = async (clipId, onProgress) => {
+    const attemptId = uploadsRepo.logAttempt(clipId, config.uploadCost);
+
+    try {
+      const result = await innerUpload(clipId, onProgress);
+      uploadsRepo.recordSuccess({
+        clipId,
+        attemptId,
+        youtubeId: result.youtubeId,
+        quotaCost: config.uploadCost,
+        datePt: scheduler.getTodayPT(),
+      });
+      return result;
+    } catch (error: unknown) {
+      const code = error instanceof UploadError ? error.code : "UNKNOWN";
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (SYSTEM_FAILURE_CODES.has(code)) {
+        uploadsRepo.recordSystemFailure({ attemptId, errorMessage: message, errorCode: code });
+      } else {
+        uploadsRepo.recordFailure({ clipId, attemptId, errorMessage: message, errorCode: code });
+      }
+
+      // Re-throw in the shape the XState machine expects.
+      throw { error: message, code };
+    }
+  };
 
   async function getClipData(clipId: string) {
     const clip = clipsRepo.getClipsPaginated({ search: clipId, pageSize: 1 }).clips[0];

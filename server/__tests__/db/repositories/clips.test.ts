@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { TwitchClip } from "#server/archive/types.js";
 import { createTestDb } from "#server/db/connection.js";
-import { createClipsRepository } from "#server/db/repositories/clips.js";
+import { ClipRowSchema, createClipsRepository } from "#server/db/repositories/clips.js";
 
 let db: Database.Database;
 let repo: ReturnType<typeof createClipsRepository>;
@@ -156,13 +156,96 @@ describe("resetInterrupted", () => {
     repo.markUploading("clip-1");
     // clip-2 stays pending
 
-    const count = repo.resetInterrupted();
-    expect(count).toBe(1);
+    const result = repo.resetInterrupted();
+    expect(result.reset).toBe(1);
+    expect(result.promoted).toBe(0);
 
     const row = db.prepare("SELECT sync_status FROM clips WHERE clip_id = ?").get("clip-1") as {
       sync_status: string;
     };
     expect(row.sync_status).toBe("pending");
+  });
+
+  it("promotes uploading clips that already have a youtube_id to uploaded", () => {
+    repo.upsertFromArchive([makeClip({ clipId: "clip-1" })]);
+    repo.markUploading("clip-1");
+    // Simulate: upload succeeded (youtube_id set) but markUploaded crashed mid-flight,
+    // leaving status='uploading' with youtube_id populated.
+    db.prepare("UPDATE clips SET youtube_id = ? WHERE clip_id = ?").run("yt-survivor", "clip-1");
+
+    const result = repo.resetInterrupted();
+    expect(result.reset).toBe(0);
+    expect(result.promoted).toBe(1);
+
+    const row = db
+      .prepare("SELECT sync_status, youtube_id, uploaded_at FROM clips WHERE clip_id = ?")
+      .get("clip-1") as { sync_status: string; youtube_id: string; uploaded_at: string };
+    expect(row.sync_status).toBe("uploaded");
+    expect(row.youtube_id).toBe("yt-survivor");
+    expect(row.uploaded_at).toBeTruthy();
+  });
+
+  it("does not touch rows with non-uploading status", () => {
+    repo.upsertFromArchive([
+      makeClip({ clipId: "u" }),
+      makeClip({ clipId: "p" }),
+      makeClip({ clipId: "f" }),
+    ]);
+    repo.markUploading("u");
+    repo.markUploaded("u", "yt-1");
+    repo.markFailed("f", "boom");
+
+    const result = repo.resetInterrupted();
+    expect(result.reset).toBe(0);
+    expect(result.promoted).toBe(0);
+
+    expect(
+      (
+        db.prepare("SELECT sync_status FROM clips WHERE clip_id = ?").get("u") as {
+          sync_status: string;
+        }
+      ).sync_status,
+    ).toBe("uploaded");
+    expect(
+      (
+        db.prepare("SELECT sync_status FROM clips WHERE clip_id = ?").get("p") as {
+          sync_status: string;
+        }
+      ).sync_status,
+    ).toBe("pending");
+    expect(
+      (
+        db.prepare("SELECT sync_status FROM clips WHERE clip_id = ?").get("f") as {
+          sync_status: string;
+        }
+      ).sync_status,
+    ).toBe("failed");
+  });
+
+  it("handles a mix of recoverable and unrecoverable interrupted rows atomically", () => {
+    repo.upsertFromArchive([makeClip({ clipId: "lost" }), makeClip({ clipId: "saved" })]);
+    repo.markUploading("lost");
+    repo.markUploading("saved");
+    db.prepare("UPDATE clips SET youtube_id = ? WHERE clip_id = ?").run("yt-saved", "saved");
+
+    const result = repo.resetInterrupted();
+    expect(result.reset).toBe(1);
+    expect(result.promoted).toBe(1);
+
+    expect(
+      (
+        db.prepare("SELECT sync_status FROM clips WHERE clip_id = ?").get("lost") as {
+          sync_status: string;
+        }
+      ).sync_status,
+    ).toBe("pending");
+    expect(
+      (
+        db.prepare("SELECT sync_status FROM clips WHERE clip_id = ?").get("saved") as {
+          sync_status: string;
+        }
+      ).sync_status,
+    ).toBe("uploaded");
   });
 });
 
@@ -196,6 +279,57 @@ describe("getFailedForRetry", () => {
     const retryable = repo.getFailedForRetry(3);
     expect(retryable).toHaveLength(1);
     expect(retryable[0].clip_id).toBe("b");
+  });
+});
+
+describe("ClipRowSchema sync_status", () => {
+  const baseRow = {
+    clip_id: "x",
+    title: "t",
+    url: "u",
+    embed_url: "e",
+    broadcaster_id: 1,
+    broadcaster_name: "b",
+    creator_id: 2,
+    creator_name: "c",
+    game_id: null,
+    language: null,
+    view_count: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    thumbnail_url: null,
+    clip_archived: 1,
+    thumbnail_archived: 1,
+    deleted_on_twitch: 0,
+    youtube_id: null,
+    uploaded_at: null,
+    last_error: null,
+    retry_count: 0,
+    first_seen_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+
+  for (const status of [
+    "pending",
+    "uploading",
+    "uploaded",
+    "failed",
+    "skipped",
+    "ignored",
+  ] as const) {
+    it(`accepts valid sync_status="${status}"`, () => {
+      const result = ClipRowSchema.safeParse({ ...baseRow, sync_status: status });
+      expect(result.success).toBe(true);
+    });
+  }
+
+  it("rejects an unknown sync_status value", () => {
+    const result = ClipRowSchema.safeParse({ ...baseRow, sync_status: "bogus" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty sync_status value", () => {
+    const result = ClipRowSchema.safeParse({ ...baseRow, sync_status: "" });
+    expect(result.success).toBe(false);
   });
 });
 

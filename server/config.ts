@@ -27,6 +27,16 @@ function optionalInt(name: string, defaultValue: number): number {
   return parsed;
 }
 
+function optionalIntOrUndefined(name: string): number | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    throw new TypeError(`Invalid integer for ${name}: ${value}`);
+  }
+  return parsed;
+}
+
 function optionalBool(name: string, defaultValue: boolean): boolean {
   const value = process.env[name];
   if (!value) return defaultValue;
@@ -65,6 +75,14 @@ export function loadConfig() {
     uploadCost: optionalInt("UPLOAD_COST", 100),
     uploadIntervalMs: optionalInt("UPLOAD_INTERVAL_MS", 10000),
     archivePollIntervalMs: optionalInt("ARCHIVE_POLL_INTERVAL_MS", 900000),
+    /**
+     * Optional fallback for archive readers whose upstream writer doesn't yet
+     * emit a `.done` marker file alongside each dump. When set, the reader
+     * picks the newest dump older than this many ms instead of requiring a
+     * marker. Leave unset (the default) once the upstream writer has been
+     * updated.
+     */
+    readerLegacyFreshnessMs: optionalIntOrUndefined("READER_LEGACY_FRESHNESS_MS"),
     maxRetryCount: optionalInt("MAX_RETRY_COUNT", 3),
     logLevel: optional("LOG_LEVEL", "info"),
     dryRun,

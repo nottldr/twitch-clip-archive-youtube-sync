@@ -1,7 +1,11 @@
 import { google } from "googleapis";
 
 import type { Config } from "#server/config.js";
-import type { OAuthRepository } from "#server/db/repositories/oauth.js";
+import type { OAuthRepository, OAuthTokens } from "#server/db/repositories/oauth.js";
+
+/** The real OAuth2 client type, derived via the googleapis surface so we don't
+ *  need a direct dep on google-auth-library. */
+export type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
 
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
@@ -9,12 +13,78 @@ const SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform.read-only",
 ];
 
-export function createAuthManager(config: Config, oauthRepo: OAuthRepository) {
+const REFRESH_WINDOW_MS = 5 * 60 * 1000;
+
+export function createAuthManager(config: Config, oauthRepo: OAuthRepository): AuthManager {
   const oauth2Client = new google.auth.OAuth2(
     config.googleClientId,
     config.googleClientSecret,
     `${config.oauthRedirectBase}/api/oauth/callback`,
   );
+  return createAuthManagerWithClient(oauth2Client, oauthRepo);
+}
+
+/**
+ * Internal factory exposed for tests. Accepts a pre-built OAuth2 client so the
+ * test suite can inject a counted/mocked instance instead of hitting Google.
+ * Tests can pass a structurally-compatible fake via `as unknown as OAuth2Client`.
+ */
+export function createAuthManagerWithClient(
+  oauth2Client: OAuth2Client,
+  oauthRepo: OAuthRepository,
+): AuthManager {
+  // Single-flight refresh: while one refresh is in flight, concurrent callers
+  // share its promise instead of each kicking off their own. Cleared in `finally`
+  // so a failed refresh doesn't poison subsequent attempts.
+  let inflightRefresh: Promise<OAuthTokens> | null = null;
+
+  async function refreshNow(tokens: OAuthTokens): Promise<OAuthTokens> {
+    if (inflightRefresh) return inflightRefresh;
+    inflightRefresh = (async () => {
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        const next: OAuthTokens = {
+          access_token: credentials.access_token ?? tokens.access_token,
+          refresh_token: credentials.refresh_token ?? tokens.refresh_token,
+          expiry_date: new Date(credentials.expiry_date ?? Date.now()).toISOString(),
+          scope: credentials.scope ?? tokens.scope,
+          token_type: credentials.token_type ?? tokens.token_type,
+        };
+        oauthRepo.saveTokens(next);
+        return next;
+      } finally {
+        inflightRefresh = null;
+      }
+    })();
+    return inflightRefresh;
+  }
+
+  async function loadAndRefresh(): Promise<OAuthTokens | null> {
+    const tokens = oauthRepo.getTokens();
+    if (!tokens) return null;
+
+    oauth2Client.setCredentials({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expiry_date: new Date(tokens.expiry_date).getTime(),
+      scope: tokens.scope,
+      token_type: tokens.token_type,
+    });
+
+    const expiryMs = new Date(tokens.expiry_date).getTime();
+    if (Date.now() >= expiryMs - REFRESH_WINDOW_MS) {
+      const refreshed = await refreshNow(tokens);
+      oauth2Client.setCredentials({
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+        expiry_date: new Date(refreshed.expiry_date).getTime(),
+        scope: refreshed.scope,
+        token_type: refreshed.token_type,
+      });
+      return refreshed;
+    }
+    return tokens;
+  }
 
   function getAuthUrl(): string {
     return oauth2Client.generateAuthUrl({
@@ -45,31 +115,8 @@ export function createAuthManager(config: Config, oauthRepo: OAuthRepository) {
   }
 
   async function getAuthenticatedClient() {
-    const tokens = oauthRepo.getTokens();
+    const tokens = await loadAndRefresh();
     if (!tokens) return null;
-
-    oauth2Client.setCredentials({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry_date: new Date(tokens.expiry_date).getTime(),
-      scope: tokens.scope,
-      token_type: tokens.token_type,
-    });
-
-    // Refresh if within 5 minutes of expiry
-    const expiryDate = new Date(tokens.expiry_date).getTime();
-    const fiveMinutes = 5 * 60 * 1000;
-    if (Date.now() >= expiryDate - fiveMinutes) {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      oauthRepo.saveTokens({
-        access_token: credentials.access_token ?? tokens.access_token,
-        refresh_token: credentials.refresh_token ?? tokens.refresh_token,
-        expiry_date: new Date(credentials.expiry_date ?? Date.now()).toISOString(),
-        scope: credentials.scope ?? tokens.scope,
-        token_type: credentials.token_type ?? tokens.token_type,
-      });
-    }
-
     return google.youtube({ version: "v3", auth: oauth2Client });
   }
 
@@ -83,30 +130,8 @@ export function createAuthManager(config: Config, oauthRepo: OAuthRepository) {
 
   /** Get the raw OAuth2 client (for non-YouTube Google APIs). Refreshes token if needed. */
   async function getOAuth2Client() {
-    const tokens = oauthRepo.getTokens();
+    const tokens = await loadAndRefresh();
     if (!tokens) return null;
-
-    oauth2Client.setCredentials({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry_date: new Date(tokens.expiry_date).getTime(),
-      scope: tokens.scope,
-      token_type: tokens.token_type,
-    });
-
-    const expiryDate = new Date(tokens.expiry_date).getTime();
-    const fiveMinutes = 5 * 60 * 1000;
-    if (Date.now() >= expiryDate - fiveMinutes) {
-      const { credentials } = await oauth2Client.refreshAccessToken();
-      oauthRepo.saveTokens({
-        access_token: credentials.access_token ?? tokens.access_token,
-        refresh_token: credentials.refresh_token ?? tokens.refresh_token,
-        expiry_date: new Date(credentials.expiry_date ?? Date.now()).toISOString(),
-        scope: credentials.scope ?? tokens.scope,
-        token_type: credentials.token_type ?? tokens.token_type,
-      });
-    }
-
     return oauth2Client;
   }
 
@@ -120,7 +145,14 @@ export function createAuthManager(config: Config, oauthRepo: OAuthRepository) {
   };
 }
 
-export type AuthManager = ReturnType<typeof createAuthManager>;
+export interface AuthManager {
+  getAuthUrl(): string;
+  exchangeCode(code: string): Promise<void>;
+  getAuthenticatedClient(): Promise<ReturnType<typeof google.youtube> | null>;
+  getOAuth2Client(): Promise<OAuth2Client | null>;
+  isAuthenticated(): boolean;
+  revokeTokens(): void;
+}
 
 /**
  * Dry-run auth manager that skips Google OAuth entirely.
@@ -129,7 +161,6 @@ export type AuthManager = ReturnType<typeof createAuthManager>;
  * return a proxy that throws if anything tries to use it.
  */
 type YouTubeClient = NonNullable<Awaited<ReturnType<AuthManager["getAuthenticatedClient"]>>>;
-type OAuth2Client = NonNullable<Awaited<ReturnType<AuthManager["getOAuth2Client"]>>>;
 
 /**
  * Dry-run auth manager that skips Google OAuth entirely.

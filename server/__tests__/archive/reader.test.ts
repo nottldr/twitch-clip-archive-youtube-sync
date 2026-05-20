@@ -64,21 +64,66 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe("readLatestDump", () => {
+function writeMarker(dumpFilename: string) {
+  writeFileSync(resolve(dbDir, `${dumpFilename}.done`), "");
+}
+
+describe("readLatestDump (default: .done marker mode)", () => {
+  it("picks the latest dump that has a .done marker", () => {
+    writeDump("dump_2026-01-01_00_00_00.json", [validClipEntry]);
+    writeMarker("dump_2026-01-01_00_00_00.json");
+    writeDump("dump_2026-02-01_00_00_00.json", [secondClipEntry]);
+    writeMarker("dump_2026-02-01_00_00_00.json");
+
+    const clips = readLatestDump(tmpDir);
+    expect(clips).toHaveLength(1);
+    expect(clips[0].clipId).toBe("TestClip-def456");
+  });
+
+  it("skips a dump that has no .done marker (assumed mid-write)", () => {
+    writeDump("dump_2026-01-01_00_00_00.json", [validClipEntry]);
+    // no marker
+    const clips = readLatestDump(tmpDir);
+    expect(clips).toEqual([]);
+  });
+
+  it("falls back to the latest dump that does have a marker", () => {
+    writeDump("dump_2026-01-01_00_00_00.json", [validClipEntry]);
+    writeMarker("dump_2026-01-01_00_00_00.json");
+    writeDump("dump_2026-02-01_00_00_00.json", [secondClipEntry]);
+    // no marker on the newer one
+
+    const clips = readLatestDump(tmpDir);
+    expect(clips).toHaveLength(1);
+    expect(clips[0].clipId).toBe("TestClip-abc123");
+  });
+
+  it("returns empty array if db directory does not exist", () => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    const clips = readLatestDump(tmpDir);
+    expect(clips).toEqual([]);
+  });
+
+  it("returns empty array if no dump files exist", () => {
+    const clips = readLatestDump(tmpDir);
+    expect(clips).toEqual([]);
+  });
+});
+
+describe("readLatestDump (legacy: minAgeMs freshness heuristic)", () => {
   it("picks the latest dump file by filename", () => {
     writeDump("dump_2026-01-01_00_00_00.json", [validClipEntry]);
     writeDump("dump_2026-02-01_00_00_00.json", [secondClipEntry]);
 
-    const clips = readLatestDump(tmpDir, 0);
+    const clips = readLatestDump(tmpDir, { legacyMinAgeMs: 0 });
     expect(clips).toHaveLength(1);
     expect(clips[0].clipId).toBe("TestClip-def456");
   });
 
   it("skips files modified less than minAgeMs ago", () => {
-    // Write a file that's "too fresh" (0ms old)
     writeDump("dump_2026-01-01_00_00_00.json", [validClipEntry], 0);
 
-    const clips = readLatestDump(tmpDir, 60_000);
+    const clips = readLatestDump(tmpDir, { legacyMinAgeMs: 60_000 });
     expect(clips).toHaveLength(0);
   });
 
@@ -86,20 +131,9 @@ describe("readLatestDump", () => {
     writeDump("dump_2026-01-01_00_00_00.json", [validClipEntry], 120_000);
     writeDump("dump_2026-02-01_00_00_00.json", [secondClipEntry], 0);
 
-    const clips = readLatestDump(tmpDir, 60_000);
+    const clips = readLatestDump(tmpDir, { legacyMinAgeMs: 60_000 });
     expect(clips).toHaveLength(1);
     expect(clips[0].clipId).toBe("TestClip-abc123");
-  });
-
-  it("returns empty array if db directory does not exist", () => {
-    rmSync(tmpDir, { recursive: true, force: true });
-    const clips = readLatestDump(tmpDir, 0);
-    expect(clips).toEqual([]);
-  });
-
-  it("returns empty array if no dump files exist", () => {
-    const clips = readLatestDump(tmpDir, 0);
-    expect(clips).toEqual([]);
   });
 });
 

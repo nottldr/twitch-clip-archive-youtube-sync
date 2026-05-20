@@ -73,6 +73,9 @@ function writeDump(clips: Array<{ clip_id: string; created_at: string; title?: s
 
   const filePath = resolve(dbDir, "dump_2026-01-01_00_00_00.json");
   writeFileSync(filePath, JSON.stringify(entries));
+  // Atomic write contract: write a `.done` marker so the reader picks the dump up.
+  writeFileSync(`${filePath}.done`, "");
+  // Backstop for any leftover legacy-mode tests (cheap; harmless when ignored).
   const mtime = new Date(Date.now() - 120_000);
   utimesSync(filePath, mtime, mtime);
 }

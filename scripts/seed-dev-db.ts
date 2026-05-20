@@ -25,7 +25,7 @@ runMigrations(db);
 const { createClipsRepository } = await import("../server/db/repositories/clips.js");
 const clipsRepo = createClipsRepository(db);
 
-const clips = readLatestDump(archivePath, 0);
+const clips = readLatestDump(archivePath, { legacyMinAgeMs: 0 });
 console.log(`Importing ${clips.length} clips from fixtures...`);
 clipsRepo.upsertFromArchive(clips);
 
