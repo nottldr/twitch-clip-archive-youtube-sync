@@ -23,10 +23,10 @@ const logger = createLogger("server");
 // Database
 const db = getDb(config.dataPath);
 const clipsRepo = createClipsRepository(db);
-const uploadsRepo = createUploadsRepository(db);
+const logRepo = createEngineLogRepository(db);
+const uploadsRepo = createUploadsRepository(db, logRepo);
 const quotaRepo = createQuotaRepository(db);
 const oauthRepo = createOAuthRepository(db);
-const logRepo = createEngineLogRepository(db);
 const engineStateRepo = createEngineStateRepository(db);
 
 // YouTube auth
@@ -40,13 +40,26 @@ const scheduler = createScheduler(quotaRepo, config.dailyQuotaLimit, config.uplo
 // SSE
 const sseManager = createSSEManager();
 
-// Engine event handler: SSE broadcasts + DB logging on state changes
+// Engine event handler: SSE broadcasts + DB logging on state changes.
+// Also derives `auth:lost`/`auth:gained` events from transitions in/out of
+// `active.blocked.awaitingAuth` — the UI listens for these to surface the
+// reconnect banner without having to interpret state paths itself.
+const AUTH_AWAITING_STATE = "active.blocked.awaitingAuth";
 let previousLogState = "";
 const eventHandler: EngineEventHandler = {
   onStateChange(snapshot) {
     logger.info({ state: snapshot.state }, "Engine state changed");
     sseManager.broadcast("engine:state", snapshot);
+
     if (snapshot.state !== previousLogState) {
+      const wasAwaitingAuth = previousLogState === AUTH_AWAITING_STATE;
+      const isAwaitingAuth = snapshot.state === AUTH_AWAITING_STATE;
+      if (!wasAwaitingAuth && isAwaitingAuth) {
+        sseManager.broadcast("auth:lost", { state: snapshot.state });
+      } else if (wasAwaitingAuth && !isAwaitingAuth) {
+        sseManager.broadcast("auth:gained", { state: snapshot.state });
+      }
+
       logRepo.insert({
         type: "state_change",
         fromState: previousLogState || null,
@@ -60,6 +73,15 @@ const eventHandler: EngineEventHandler = {
   },
   onUploadProgress(clipId, bytesTransferred, totalBytes) {
     sseManager.broadcast("engine:upload-progress", { clipId, bytesTransferred, totalBytes });
+  },
+  onClipUploaded(clipId, youtubeId) {
+    sseManager.broadcast("clip:uploaded", { clipId, youtubeId });
+  },
+  onClipFailed(clipId, errorCode, errorMessage) {
+    sseManager.broadcast("clip:failed", { clipId, errorCode, errorMessage });
+  },
+  onClipSkipped(clipId, reason) {
+    sseManager.broadcast("clip:skipped", { clipId, reason });
   },
 };
 
@@ -75,7 +97,16 @@ const engine = createSyncEngine(
 );
 
 // Hono app
-const app = createApp(config, clipsRepo, scheduler, engine, authManager, sseManager, logRepo);
+const app = createApp(
+  config,
+  clipsRepo,
+  uploadsRepo,
+  scheduler,
+  engine,
+  authManager,
+  sseManager,
+  logRepo,
+);
 
 // Start server, wait for it to be listening before starting the engine
 // eslint-disable-next-line typescript/no-misused-promises -- getRequestListener returns async handler by design

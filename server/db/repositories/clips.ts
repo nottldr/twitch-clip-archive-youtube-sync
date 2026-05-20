@@ -61,10 +61,12 @@ export interface ClipStats {
   ignored: number;
 }
 
+export type ClipSortBy = "created_at" | "title" | "sync_status" | "retry_count";
+
 export interface ClipFilters {
   statuses?: string[];
   search?: string;
-  sortBy?: "created_at" | "title" | "sync_status";
+  sortBy?: ClipSortBy;
   sortOrder?: "asc" | "desc";
   page?: number;
   pageSize?: number;
@@ -141,6 +143,10 @@ export function createClipsRepository(db: Database.Database) {
 
   function upsertFromArchive(clips: TwitchClip[]): number {
     return _upsertTransaction(clips);
+  }
+
+  function getById(clipId: string): ClipRow | undefined {
+    return parseRow(ClipRowSchema, db.prepare("SELECT * FROM clips WHERE clip_id = ?").get(clipId));
   }
 
   function getNextPending(): ClipRow | undefined {
@@ -307,7 +313,7 @@ export function createClipsRepository(db: Database.Database) {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const allowedSorts = ["created_at", "title", "sync_status"];
+    const allowedSorts: readonly string[] = ["created_at", "title", "sync_status", "retry_count"];
     const sort = allowedSorts.includes(sortBy) ? sortBy : "created_at";
     const order = sortOrder === "desc" ? "DESC" : "ASC";
 
@@ -396,8 +402,45 @@ export function createClipsRepository(db: Database.Database) {
     return count;
   }
 
+  /**
+   * Apply one action atomically across a list of clip IDs. Either every row's
+   * mutation lands or none does. The UI relies on this for bulk operations
+   * (e.g. select 50 failed clips → Retry) without leaving the table in a
+   * half-changed state if some IDs are stale.
+   */
+  type BulkAction = "ignore" | "reset" | "retry";
+
+  const _bulkActionTx = db.transaction((action: BulkAction, clipIds: string[]): number => {
+    if (action === "ignore") {
+      const stmt = db.prepare(
+        "UPDATE clips SET sync_status = 'ignored', updated_at = datetime('now') WHERE clip_id = ? AND sync_status != 'ignored'",
+      );
+      let affected = 0;
+      for (const id of clipIds) affected += stmt.run(id).changes;
+      return affected;
+    }
+    if (action === "reset" || action === "retry") {
+      // reset and retry are the same atomic operation today: clear sync state
+      // and counters, leave 'ignored' rows alone. The caller (the engine
+      // wrapper) is responsible for nudging the machine on retry.
+      const stmt = db.prepare(
+        "UPDATE clips SET sync_status = 'pending', youtube_id = NULL, uploaded_at = NULL, last_error = NULL, retry_count = 0, updated_at = datetime('now') WHERE clip_id = ? AND sync_status != 'ignored'",
+      );
+      let affected = 0;
+      for (const id of clipIds) affected += stmt.run(id).changes;
+      return affected;
+    }
+    throw new Error(`Unknown bulk action: ${String(action)}`);
+  });
+
+  function bulkAction(input: { action: BulkAction; clipIds: string[] }): { affected: number } {
+    if (input.clipIds.length === 0) return { affected: 0 };
+    return { affected: _bulkActionTx(input.action, input.clipIds) };
+  }
+
   return {
     upsertFromArchive,
+    getById,
     getNextPending,
     getNextRetryable,
     markUploading,
@@ -409,6 +452,7 @@ export function createClipsRepository(db: Database.Database) {
     resetClip,
     resetFailed,
     resetAll,
+    bulkAction,
     getStats,
     getClipsPaginated,
     getFailedForRetry,

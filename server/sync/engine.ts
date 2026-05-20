@@ -29,11 +29,20 @@ const logger = createLogger("engine");
 export interface EngineEventHandler {
   onStateChange(snapshot: EngineSnapshot): void;
   onUploadProgress(clipId: string, bytesTransferred: number, totalBytes: number): void;
+  /** A clip successfully uploaded. */
+  onClipUploaded(clipId: string, youtubeId: string): void;
+  /** A clip failed in a way that faulted the clip (clip status now 'failed'). */
+  onClipFailed(clipId: string, errorCode: string, errorMessage: string): void;
+  /** A clip was permanently skipped (missing file, too small, etc.). */
+  onClipSkipped(clipId: string, reason: string): void;
 }
 
 const noopHandler: EngineEventHandler = {
   onStateChange: () => {},
   onUploadProgress: () => {},
+  onClipUploaded: () => {},
+  onClipFailed: () => {},
+  onClipSkipped: () => {},
 };
 
 export function createSyncEngine(
@@ -88,9 +97,11 @@ export function createSyncEngine(
     },
     onClipUploaded(clipId, youtubeId) {
       logger.info({ clipId, youtubeId }, "Upload success");
+      eventHandler.onClipUploaded(clipId, youtubeId);
     },
     onClipFailed(clipId, error, code) {
       logger.warn({ clipId, error, code }, "Upload failure");
+      eventHandler.onClipFailed(clipId, code, error);
     },
     onQuotaRecorded() {
       // Quota was already recorded atomically with the upload write — no-op.
@@ -118,11 +129,14 @@ export function createSyncEngine(
           const reason = `MP4 too small (${stat.size} bytes)`;
           clipsRepo.markSkipped(clip.clip_id, reason);
           logger.warn({ clipId: clip.clip_id, reason }, "Clip skipped");
+          eventHandler.onClipSkipped(clip.clip_id, reason);
           return null;
         }
       } catch {
-        clipsRepo.markSkipped(clip.clip_id, "MP4 file not found");
+        const reason = "MP4 file not found";
+        clipsRepo.markSkipped(clip.clip_id, reason);
         logger.warn({ clipId: clip.clip_id }, "Clip skipped: MP4 file not found");
+        eventHandler.onClipSkipped(clip.clip_id, reason);
         return null;
       }
 
@@ -316,7 +330,12 @@ export function createSyncEngine(
       const message = error instanceof Error ? error.message : String(error);
 
       if (SYSTEM_FAILURE_CODES.has(code)) {
-        uploadsRepo.recordSystemFailure({ attemptId, errorMessage: message, errorCode: code });
+        uploadsRepo.recordSystemFailure({
+          attemptId,
+          clipId,
+          errorMessage: message,
+          errorCode: code,
+        });
       } else {
         uploadsRepo.recordFailure({ clipId, attemptId, errorMessage: message, errorCode: code });
       }
@@ -413,6 +432,32 @@ export function createSyncEngine(
     return { reset: count };
   }
 
+  /**
+   * Retry a single clip from scratch: clear sync_status / youtube_id / retry_count
+   * back to pending, then nudge the machine. Returns whether any row was changed
+   * (false when the clip didn't exist or was already pending).
+   */
+  function retryClip(clipId: string): { reset: boolean } {
+    const reset = clipsRepo.resetClip(clipId);
+    if (reset) actor.send({ type: "CLIPS_CHANGED" });
+    return { reset };
+  }
+
+  /**
+   * Apply a bulk action across many clips atomically. On 'retry', also nudges
+   * the engine so the newly-pending clips get picked up immediately rather than
+   * waiting for the next archive-poll tick.
+   */
+  function bulkClipAction(input: { action: "ignore" | "reset" | "retry"; clipIds: string[] }): {
+    affected: number;
+  } {
+    const result = clipsRepo.bulkAction(input);
+    if (result.affected > 0 && input.action !== "ignore") {
+      actor.send({ type: "CLIPS_CHANGED" });
+    }
+    return result;
+  }
+
   // Debug controls
   function setDebugFlag(flag: "fail" | "quota" | "uploadLimit", value: boolean) {
     const eventMap = {
@@ -450,6 +495,8 @@ export function createSyncEngine(
     notifyQuotaReset,
     resetFailedClips,
     resetAllClips,
+    retryClip,
+    bulkClipAction,
     setDebugFlag,
     clearDebugFlags,
     send,

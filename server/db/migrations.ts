@@ -150,6 +150,18 @@ const migrations: Migration[] = [
       CREATE INDEX idx_clips_youtube_id ON clips(youtube_id);
     `,
   },
+  {
+    version: 5,
+    sql: `
+      -- Speed up clip-scoped queries: per-clip attempt history (UI drawer) and
+      -- per-clip log lookups (queryable /api/logs?clipId=…). Both are append-only
+      -- read paths whose existing scans become O(n) without these indexes.
+      CREATE INDEX idx_upload_attempts_clip_started
+        ON upload_attempts(clip_id, started_at DESC);
+
+      CREATE INDEX idx_engine_log_clip_id ON engine_log(clip_id);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

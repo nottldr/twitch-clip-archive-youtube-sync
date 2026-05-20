@@ -1,17 +1,37 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
+import { ClipDetailDrawer } from "#web/components/ClipDetailDrawer.js";
 import { ClipTable } from "#web/components/ClipTable.js";
 import { fetchJson } from "#web/lib/api.js";
 import { DashboardStatsSchema, PaginatedClipsSchema } from "#web/lib/types.js";
 
 const ALL_STATUSES = ["pending", "uploading", "uploaded", "failed", "skipped", "ignored"] as const;
 
+type SortBy = "created_at" | "title" | "sync_status" | "retry_count";
+type SortOrder = "asc" | "desc";
+
 export function Clips() {
   const [page, setPage] = useState(1);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(ALL_STATUSES));
-  const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("created_at");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
+  const [drawerClipId, setDrawerClipId] = useState<string | null>(null);
+
+  const queryClient = useQueryClient();
+
+  // Debounce search input so typing doesn't hammer the API every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 300);
+    return () => {
+      clearTimeout(t);
+    };
+  }, [searchInput]);
 
   const { data: stats } = useQuery({
     queryKey: ["stats"],
@@ -23,6 +43,8 @@ export function Clips() {
   const params = new URLSearchParams();
   params.set("page", String(page));
   params.set("pageSize", "50");
+  params.set("sortBy", sortBy);
+  params.set("sortOrder", sortOrder);
   if (statusParam && selectedStatuses.size < ALL_STATUSES.length) {
     params.set("status", statusParam);
   }
@@ -31,8 +53,20 @@ export function Clips() {
   }
 
   const { data, isLoading } = useQuery({
-    queryKey: ["clips", page, statusParam, search],
-    queryFn: () => fetchJson(`/api/clips?${params}`, PaginatedClipsSchema),
+    queryKey: ["clips", page, statusParam, search, sortBy, sortOrder],
+    queryFn: () => fetchJson(`/api/clips?${params.toString()}`, PaginatedClipsSchema),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (clipId: string) => {
+      const res = await fetch(`/api/clips/${clipId}/retry`, { method: "POST" });
+      if (!res.ok) throw new Error(`Retry failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["clips"] });
+      void queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
   });
 
   function toggleStatus(status: string) {
@@ -52,28 +86,28 @@ export function Clips() {
     if (!data) return;
     const links = data.clips
       .filter((c) => c.youtube_id)
-      .map((c) => `https://youtu.be/${c.youtube_id}`)
+      .map((c) => `https://youtu.be/${c.youtube_id ?? ""}`)
       .join("\n");
     void navigator.clipboard.writeText(links);
   }
 
+  /**
+   * Server-side CSV export. Honors current filters (status + search) and
+   * returns every matching row — not just the current page like the old
+   * client-side export.
+   */
   function handleExportCsv() {
-    if (!data) return;
-    const header = "clip_id,title,youtube_url,uploaded_at";
-    const rows = data.clips
-      .filter((c) => c.youtube_id)
-      .map(
-        (c) =>
-          `"${c.clip_id}","${c.title.replaceAll('"', '""')}","https://youtu.be/${c.youtube_id}","${c.uploaded_at ?? ""}"`,
-      );
-    const csv = [header, ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
+    const exportParams = new URLSearchParams();
+    if (statusParam && selectedStatuses.size < ALL_STATUSES.length) {
+      exportParams.set("status", statusParam);
+    }
+    if (search) exportParams.set("search", search);
+    const url = `/api/clips/export?${exportParams.toString()}`;
+    // Use a hidden anchor so the browser handles the Content-Disposition download.
     const a = document.createElement("a");
     a.href = url;
-    a.download = "clips-export.csv";
+    a.download = "";
     a.click();
-    URL.revokeObjectURL(url);
   }
 
   const statusCounts: Record<string, number> = stats
@@ -100,6 +134,7 @@ export function Clips() {
           </button>
           <button
             onClick={handleExportCsv}
+            title="Export every matching clip (not just this page)"
             className="rounded border px-3 py-1 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
           >
             Export CSV
@@ -129,30 +164,27 @@ export function Clips() {
         ))}
       </div>
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          setSearch(searchInput);
-          setPage(1);
-        }}
-        className="flex gap-2"
-      >
+      <div className="flex gap-2">
         <input
           type="text"
           value={searchInput}
           onChange={(e) => {
             setSearchInput(e.target.value);
           }}
-          placeholder="Search..."
+          placeholder="Search clip ID, title, creator..."
           className="w-40 rounded border px-2 py-1 text-sm sm:w-64 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
         />
-        <button
-          type="submit"
-          className="rounded border px-3 py-1 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
-        >
-          Search
-        </button>
-      </form>
+        {searchInput && (
+          <button
+            onClick={() => {
+              setSearchInput("");
+            }}
+            className="rounded border px-3 py-1 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
+          >
+            Clear
+          </button>
+        )}
+      </div>
 
       <div className="rounded-lg bg-white shadow-sm dark:bg-gray-800">
         {isLoading && !data ? (
@@ -160,12 +192,33 @@ export function Clips() {
         ) : data ? (
           <ClipTable
             data={data}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={(by, order) => {
+              // eslint-disable-next-line typescript/no-unsafe-type-assertion -- column ids are constrained to SortBy
+              setSortBy(by as SortBy);
+              setSortOrder(order);
+              setPage(1);
+            }}
             onPageChange={(p) => {
               setPage(p);
+            }}
+            onRetry={(clipId) => {
+              retryMutation.mutate(clipId);
+            }}
+            onView={(clipId) => {
+              setDrawerClipId(clipId);
             }}
           />
         ) : null}
       </div>
+
+      <ClipDetailDrawer
+        clipId={drawerClipId}
+        onClose={() => {
+          setDrawerClipId(null);
+        }}
+      />
     </div>
   );
 }

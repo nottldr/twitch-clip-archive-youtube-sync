@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Config } from "#server/config.js";
 import { createTestDb } from "#server/db/connection.js";
 import { createClipsRepository } from "#server/db/repositories/clips.js";
+import { createEngineLogRepository } from "#server/db/repositories/engine-log.js";
 import { createQuotaRepository } from "#server/db/repositories/quota.js";
 import { createUploadsRepository } from "#server/db/repositories/uploads.js";
 import { createSyncEngine } from "#server/sync/engine.js";
@@ -129,7 +130,7 @@ describe("sync engine with XState", () => {
     const engine = createSyncEngine(
       makeConfig(),
       createClipsRepository(db),
-      createUploadsRepository(db),
+      createUploadsRepository(db, createEngineLogRepository(db)),
       createScheduler(createQuotaRepository(db), 10000, 100),
       mockAuthManager(),
       mockEngineStateRepo(),
@@ -145,7 +146,7 @@ describe("sync engine with XState", () => {
     const engine = createSyncEngine(
       makeConfig(),
       createClipsRepository(db),
-      createUploadsRepository(db),
+      createUploadsRepository(db, createEngineLogRepository(db)),
       createScheduler(createQuotaRepository(db), 10000, 100),
       mockAuthManager(),
       mockEngineStateRepo(),
@@ -172,7 +173,7 @@ describe("sync engine with XState", () => {
     const engine = createSyncEngine(
       makeConfig(),
       createClipsRepository(db),
-      createUploadsRepository(db),
+      createUploadsRepository(db, createEngineLogRepository(db)),
       createScheduler(createQuotaRepository(db), 10000, 100),
       mockAuthManager(),
       mockEngineStateRepo(),
@@ -200,7 +201,7 @@ describe("sync engine with XState", () => {
     const engine = createSyncEngine(
       makeConfig(),
       clipsRepo,
-      createUploadsRepository(db),
+      createUploadsRepository(db, createEngineLogRepository(db)),
       createScheduler(createQuotaRepository(db), 10000, 100),
       mockAuthManager(),
       mockEngineStateRepo(),
@@ -241,7 +242,7 @@ describe("sync engine with XState", () => {
     const engine = createSyncEngine(
       makeConfig(),
       createClipsRepository(db),
-      createUploadsRepository(db),
+      createUploadsRepository(db, createEngineLogRepository(db)),
       createScheduler(createQuotaRepository(db), 10000, 100),
       mockAuthManager(),
       mockEngineStateRepo(),

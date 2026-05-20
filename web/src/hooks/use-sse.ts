@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const EVENT_TYPES = ["upload:success", "upload:failure", "engine:state", "engine:upload-progress"];
+/**
+ * Map of SSE event types → handler. The handler receives the parsed JSON
+ * payload (or null if the payload isn't valid JSON). The hook keeps
+ * the latest handlers in a ref so callers can re-render without resubscribing.
+ */
+export type SSEHandlers = Record<string, (payload: unknown) => void>;
 
-export function useSSE(onEvent?: () => void) {
+export function useSSE(handlers: SSEHandlers) {
   const [connected, setConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
 
   const connect = useCallback(() => {
     if (eventSourceRef.current) {
@@ -25,9 +30,18 @@ export function useSSE(onEvent?: () => void) {
       setTimeout(connect, 5000);
     };
 
-    for (const type of EVENT_TYPES) {
-      es.addEventListener(type, () => {
-        onEventRef.current?.();
+    // Snapshot the event-type list at subscription time. Adding/removing
+    // event types means a reconnect, which is fine — handlers are looked up
+    // dynamically via the ref so changing function identity doesn't matter.
+    for (const type of Object.keys(handlersRef.current)) {
+      es.addEventListener(type, (e: MessageEvent<string>) => {
+        let payload: unknown = null;
+        try {
+          payload = JSON.parse(e.data);
+        } catch {
+          // non-JSON payload (e.g. the initial "connected" event); leave as null
+        }
+        handlersRef.current[type]?.(payload);
       });
     }
   }, []);

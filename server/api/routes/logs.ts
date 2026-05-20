@@ -13,7 +13,23 @@ export function createLogsRoutes(logRepo: EngineLogRepository) {
       ? Number.parseInt(c.req.query("before") ?? "0", 10)
       : undefined;
 
-    return c.json(logRepo.query({ types, limit, beforeId }));
+    // Treat missing AND empty-string query params as "no filter".
+    const opt = (name: string): string | undefined => {
+      const v = c.req.query(name);
+      return v && v.length > 0 ? v : undefined;
+    };
+
+    return c.json(
+      logRepo.query({
+        types,
+        limit,
+        beforeId,
+        clipId: opt("clipId"),
+        since: opt("since"),
+        until: opt("until"),
+        errorCode: opt("errorCode"),
+      }),
+    );
   });
 
   app.post("/logs/clear", (c) => {

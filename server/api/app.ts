@@ -8,6 +8,7 @@ import { cors } from "hono/cors";
 import type { Config } from "#server/config.js";
 import type { ClipsRepository } from "#server/db/repositories/clips.js";
 import type { EngineLogRepository } from "#server/db/repositories/engine-log.js";
+import type { UploadsRepository } from "#server/db/repositories/uploads.js";
 import type { SyncEngine } from "#server/sync/engine.js";
 import type { Scheduler } from "#server/sync/scheduler.js";
 import type { AuthManager } from "#server/youtube/auth.js";
@@ -22,6 +23,7 @@ import { createStatsRoutes } from "./routes/stats.js";
 export function createApp(
   config: Config,
   clipsRepo: ClipsRepository,
+  uploadsRepo: UploadsRepository,
   scheduler: Scheduler,
   engine: SyncEngine,
   authManager: AuthManager,
@@ -64,7 +66,7 @@ export function createApp(
 
   // API routes
   app.route("/api", createStatsRoutes(clipsRepo, scheduler, engine));
-  app.route("/api", createClipsRoutes(clipsRepo));
+  app.route("/api", createClipsRoutes(clipsRepo, uploadsRepo, logRepo, engine));
   app.route("/api", createOAuthRoutes(authManager, engine));
   app.route("/api", createEngineRoutes(engine, authManager, config));
   app.route("/api", createLogsRoutes(logRepo));

@@ -282,6 +282,63 @@ describe("getFailedForRetry", () => {
   });
 });
 
+describe("getById", () => {
+  it("returns the clip row for an existing clip", () => {
+    repo.upsertFromArchive([makeClip({ clipId: "abc", title: "Hello" })]);
+    const clip = repo.getById("abc");
+    expect(clip).toBeDefined();
+    expect(clip?.clip_id).toBe("abc");
+    expect(clip?.title).toBe("Hello");
+  });
+
+  it("returns undefined for a missing clip", () => {
+    expect(repo.getById("nope")).toBeUndefined();
+  });
+});
+
+describe("bulkAction", () => {
+  beforeEach(() => {
+    repo.upsertFromArchive([
+      makeClip({ clipId: "a" }),
+      makeClip({ clipId: "b" }),
+      makeClip({ clipId: "c" }),
+    ]);
+  });
+
+  it("ignore — marks all listed clips as 'ignored'", () => {
+    const result = repo.bulkAction({ action: "ignore", clipIds: ["a", "b"] });
+    expect(result.affected).toBe(2);
+    expect(repo.getById("a")?.sync_status).toBe("ignored");
+    expect(repo.getById("b")?.sync_status).toBe("ignored");
+    expect(repo.getById("c")?.sync_status).toBe("pending");
+  });
+
+  it("retry — resets all listed clips back to 'pending'", () => {
+    repo.markUploading("a");
+    repo.markUploaded("a", "yt-1");
+    repo.markFailed("b", "boom");
+
+    const result = repo.bulkAction({ action: "retry", clipIds: ["a", "b"] });
+    expect(result.affected).toBe(2);
+    expect(repo.getById("a")?.sync_status).toBe("pending");
+    expect(repo.getById("a")?.youtube_id).toBeNull();
+    expect(repo.getById("b")?.sync_status).toBe("pending");
+    expect(repo.getById("b")?.retry_count).toBe(0);
+  });
+
+  it("rejects empty clipIds with affected=0", () => {
+    const result = repo.bulkAction({ action: "ignore", clipIds: [] });
+    expect(result.affected).toBe(0);
+  });
+
+  it("rejects unknown action", () => {
+    expect(() =>
+      // eslint-disable-next-line typescript/no-unsafe-type-assertion -- testing runtime guard
+      repo.bulkAction({ action: "explode" as "ignore", clipIds: ["a"] }),
+    ).toThrow();
+  });
+});
+
 describe("ClipRowSchema sync_status", () => {
   const baseRow = {
     clip_id: "x",

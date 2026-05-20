@@ -1,14 +1,9 @@
-import type { SortingState } from "@tanstack/react-table";
-
-import { useQueryClient } from "@tanstack/react-query";
 import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
-  getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { useState } from "react";
 
 import type { ClipRow, PaginatedClips } from "#web/lib/types.js";
 
@@ -24,14 +19,26 @@ function formatDate(iso: string): string {
 
 const columnHelper = createColumnHelper<ClipRow>();
 
-function getColumns(onReset: (clipId: string) => void) {
+function getColumns(opts: {
+  onRetry: (clipId: string) => void;
+  onView: (clipId: string) => void;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  onSort: (column: string) => void;
+}) {
   return [
     columnHelper.accessor("title", {
       header: "Title",
       cell: (info) => (
-        <span className="block max-w-[12rem] truncate sm:max-w-xs" title={info.getValue()}>
+        <button
+          onClick={() => {
+            opts.onView(info.row.original.clip_id);
+          }}
+          className="block max-w-[12rem] truncate text-left hover:text-blue-600 hover:underline sm:max-w-xs dark:hover:text-blue-300"
+          title={info.getValue()}
+        >
           {info.getValue()}
-        </span>
+        </button>
       ),
     }),
     columnHelper.accessor("creator_name", {
@@ -47,6 +54,35 @@ function getColumns(onReset: (clipId: string) => void) {
       header: "Status",
       cell: (info) => <StatusBadge status={info.getValue()} />,
     }),
+    columnHelper.accessor("retry_count", {
+      header: "Retries",
+      meta: { hideBelow: "md" },
+      cell: (info) => {
+        const n = info.getValue();
+        if (n === 0) return <span className="text-gray-300">—</span>;
+        return <span className="text-orange-600 dark:text-orange-300">{n}</span>;
+      },
+    }),
+    columnHelper.accessor("last_error", {
+      header: "Last error",
+      enableSorting: false,
+      meta: { hideBelow: "lg" },
+      cell: (info) => {
+        const err = info.getValue();
+        if (!err) return <span className="text-gray-300">—</span>;
+        return (
+          <button
+            onClick={() => {
+              opts.onView(info.row.original.clip_id);
+            }}
+            className="block max-w-[14rem] truncate text-left font-mono text-xs text-red-600 hover:underline dark:text-red-300"
+            title={err}
+          >
+            {err}
+          </button>
+        );
+      },
+    }),
     columnHelper.accessor("youtube_id", {
       header: "YouTube",
       enableSorting: false,
@@ -58,6 +94,9 @@ function getColumns(onReset: (clipId: string) => void) {
             href={`https://youtu.be/${id}`}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
             className="text-blue-500 hover:underline"
           >
             {id}
@@ -72,17 +111,29 @@ function getColumns(onReset: (clipId: string) => void) {
       header: "",
       cell: (info) => {
         const status = info.row.original.sync_status;
-        if (status === "pending") return null;
         return (
-          <button
-            onClick={() => {
-              onReset(info.row.original.clip_id);
-            }}
-            className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-            title="Reset to pending"
-          >
-            Reset
-          </button>
+          <div className="flex justify-end gap-1">
+            <button
+              onClick={() => {
+                opts.onView(info.row.original.clip_id);
+              }}
+              className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="View details"
+            >
+              Detail
+            </button>
+            {status !== "pending" && status !== "uploading" && status !== "ignored" && (
+              <button
+                onClick={() => {
+                  opts.onRetry(info.row.original.clip_id);
+                }}
+                className="rounded px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                title="Retry from scratch"
+              >
+                Retry
+              </button>
+            )}
+          </div>
         );
       },
     }),
@@ -95,33 +146,40 @@ const HIDE_CLASSES: Record<string, string> = {
   lg: "hidden lg:table-cell",
 };
 
+const SORTABLE_COLUMNS = new Set(["title", "created_at", "sync_status", "retry_count"]);
+
 export function ClipTable({
   data,
+  sortBy,
+  sortOrder,
+  onSortChange,
   onPageChange,
+  onRetry,
+  onView,
 }: {
   data: PaginatedClips;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
   onPageChange: (page: number) => void;
+  onRetry: (clipId: string) => void;
+  onView: (clipId: string) => void;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const queryClient = useQueryClient();
-
-  const handleReset = (clipId: string) => {
-    void fetch(`/api/clips/${clipId}/reset`, { method: "POST" }).then(() => {
-      void queryClient.invalidateQueries({ queryKey: ["clips"] });
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-      void queryClient.invalidateQueries({ queryKey: ["activity"] });
-    });
+  const handleSort = (column: string) => {
+    if (!SORTABLE_COLUMNS.has(column)) return;
+    if (column === sortBy) {
+      onSortChange(column, sortOrder === "asc" ? "desc" : "asc");
+    } else {
+      onSortChange(column, "asc");
+    }
   };
 
-  const columns = getColumns(handleReset);
+  const columns = getColumns({ onRetry, onView, sortBy, sortOrder, onSort: handleSort });
 
   const table = useReactTable({
     data: data.clips,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
@@ -137,20 +195,24 @@ export function ClipTable({
                 {headerGroup.headers.map((header) => {
                   const hideBelow = header.column.columnDef.meta?.hideBelow;
                   const hideCls = hideBelow ? HIDE_CLASSES[hideBelow] : "";
+                  const colId = header.column.id;
+                  const isSortable = SORTABLE_COLUMNS.has(colId);
 
                   return (
                     <th
                       key={header.id}
-                      className={`px-3 py-2 ${hideCls} ${header.column.getCanSort() ? "cursor-pointer select-none" : ""}`}
-                      onClick={header.column.getToggleSortingHandler()}
+                      className={`px-3 py-2 ${hideCls} ${isSortable ? "cursor-pointer select-none" : ""}`}
+                      onClick={
+                        isSortable
+                          ? () => {
+                              handleSort(colId);
+                            }
+                          : undefined
+                      }
                     >
                       <span className="flex items-center gap-1">
                         {flexRender(header.column.columnDef.header, header.getContext())}
-                        {header.column.getIsSorted() === "asc"
-                          ? " ↑"
-                          : header.column.getIsSorted() === "desc"
-                            ? " ↓"
-                            : ""}
+                        {sortBy === colId ? (sortOrder === "asc" ? " ↑" : " ↓") : ""}
                       </span>
                     </th>
                   );

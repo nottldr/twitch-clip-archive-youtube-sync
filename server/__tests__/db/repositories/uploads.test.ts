@@ -5,6 +5,7 @@ import { z } from "zod/v4";
 
 import { createTestDb } from "#server/db/connection.js";
 import { createClipsRepository } from "#server/db/repositories/clips.js";
+import { createEngineLogRepository } from "#server/db/repositories/engine-log.js";
 import { createQuotaRepository } from "#server/db/repositories/quota.js";
 import { createUploadsRepository } from "#server/db/repositories/uploads.js";
 
@@ -12,6 +13,7 @@ let db: Database.Database;
 let clipsRepo: ReturnType<typeof createClipsRepository>;
 let uploadsRepo: ReturnType<typeof createUploadsRepository>;
 let quotaRepo: ReturnType<typeof createQuotaRepository>;
+let logRepo: ReturnType<typeof createEngineLogRepository>;
 
 const ClipRowProbe = z.object({
   sync_status: z.string(),
@@ -84,7 +86,8 @@ function readQuotaUsage(date: string): { units_used: number; uploads_count: numb
 beforeEach(() => {
   db = createTestDb();
   clipsRepo = createClipsRepository(db);
-  uploadsRepo = createUploadsRepository(db);
+  logRepo = createEngineLogRepository(db);
+  uploadsRepo = createUploadsRepository(db, logRepo);
   quotaRepo = createQuotaRepository(db);
 });
 
@@ -193,6 +196,156 @@ describe("recordSuccess", () => {
     const usage = readQuotaUsage("2026-05-20");
     expect(usage.units_used).toBe(0);
     expect(usage.uploads_count).toBe(0);
+  });
+});
+
+describe("getAttemptsByClip", () => {
+  it("returns the per-clip attempt history newest first", () => {
+    seedClip("c1");
+    seedClip("c2");
+    const a1 = uploadsRepo.logAttempt("c1", 1600);
+    uploadsRepo.recordFailure({
+      clipId: "c1",
+      attemptId: a1,
+      errorMessage: "boom",
+      errorCode: "SERVER_ERROR",
+    });
+
+    const a2 = uploadsRepo.logAttempt("c1", 1600);
+    uploadsRepo.recordSuccess({
+      clipId: "c1",
+      attemptId: a2,
+      youtubeId: "yt-c1",
+      quotaCost: 1600,
+      datePt: "2026-05-20",
+    });
+
+    // Different clip — should not show up
+    uploadsRepo.logAttempt("c2", 1600);
+
+    const result = uploadsRepo.getAttemptsByClip("c1", { limit: 10 });
+    expect(result.attempts).toHaveLength(2);
+    expect(result.attempts[0].id).toBe(a2); // newest first
+    expect(result.attempts[0].success).toBe(1);
+    expect(result.attempts[1].id).toBe(a1);
+    expect(result.attempts[1].success).toBe(0);
+    expect(result.attempts[1].error_code).toBe("SERVER_ERROR");
+    expect(result.hasMore).toBe(false);
+  });
+
+  it("paginates via beforeId", () => {
+    seedClip("c1");
+    const ids: number[] = [];
+    for (let i = 0; i < 5; i++) ids.push(uploadsRepo.logAttempt("c1", 1600));
+
+    const first = uploadsRepo.getAttemptsByClip("c1", { limit: 2 });
+    expect(first.attempts).toHaveLength(2);
+    expect(first.hasMore).toBe(true);
+
+    const next = uploadsRepo.getAttemptsByClip("c1", { limit: 2, beforeId: first.attempts[1].id });
+    expect(next.attempts).toHaveLength(2);
+    expect(next.attempts[0].id).toBeLessThan(first.attempts[1].id);
+  });
+
+  it("returns empty for a clip with no attempts", () => {
+    seedClip("c1");
+    const result = uploadsRepo.getAttemptsByClip("c1", { limit: 10 });
+    expect(result.attempts).toEqual([]);
+    expect(result.hasMore).toBe(false);
+  });
+});
+
+describe("engine_log audit trail", () => {
+  it("recordSuccess writes a type='upload' row with the youtube_id", () => {
+    seedClip("c1");
+    const attemptId = uploadsRepo.logAttempt("c1", 1600);
+
+    uploadsRepo.recordSuccess({
+      clipId: "c1",
+      attemptId,
+      youtubeId: "yt-abc",
+      quotaCost: 1600,
+      datePt: "2026-05-20",
+    });
+
+    const { entries } = logRepo.query({ types: ["upload"] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe("upload");
+    expect(entries[0].clip_id).toBe("c1");
+    expect(entries[0].youtube_id).toBe("yt-abc");
+    expect(entries[0].error).toBeNull();
+  });
+
+  it("recordFailure writes a type='upload' row with the error_code", () => {
+    seedClip("c1");
+    const attemptId = uploadsRepo.logAttempt("c1", 1600);
+
+    uploadsRepo.recordFailure({
+      clipId: "c1",
+      attemptId,
+      errorMessage: "boom",
+      errorCode: "SERVER_ERROR",
+    });
+
+    const { entries } = logRepo.query({ types: ["upload"] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe("upload");
+    expect(entries[0].clip_id).toBe("c1");
+    expect(entries[0].youtube_id).toBeNull();
+    expect(entries[0].error).toBe("SERVER_ERROR: boom");
+  });
+
+  it("recordSystemFailure writes a type='upload' row with system error context", () => {
+    seedClip("c1");
+    const attemptId = uploadsRepo.logAttempt("c1", 1600);
+
+    uploadsRepo.recordSystemFailure({
+      attemptId,
+      clipId: "c1",
+      errorMessage: "daily quota exceeded",
+      errorCode: "QUOTA_EXCEEDED",
+    });
+
+    const { entries } = logRepo.query({ types: ["upload"] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe("upload");
+    expect(entries[0].clip_id).toBe("c1");
+    expect(entries[0].error).toBe("QUOTA_EXCEEDED: daily quota exceeded");
+  });
+
+  it("log row is rolled back if the transaction fails", () => {
+    seedClip("c1");
+    const attemptId = uploadsRepo.logAttempt("c1", 1600);
+
+    const realPrepare = db.prepare.bind(db);
+    // eslint-disable-next-line typescript/no-unsafe-type-assertion -- test-only sabotage
+    (db as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      if (sql.includes("UPDATE clips SET sync_status = 'uploaded'")) {
+        return {
+          run: () => {
+            throw new Error("simulated mid-tx failure");
+          },
+        } as unknown as ReturnType<typeof db.prepare>;
+      }
+      return realPrepare(sql);
+      // eslint-disable-next-line typescript/no-unsafe-type-assertion -- test-only sabotage
+    }) as typeof db.prepare;
+
+    expect(() => {
+      uploadsRepo.recordSuccess({
+        clipId: "c1",
+        attemptId,
+        youtubeId: "yt-1",
+        quotaCost: 1600,
+        datePt: "2026-05-20",
+      });
+    }).toThrow();
+
+    // eslint-disable-next-line typescript/no-unsafe-type-assertion -- test-only sabotage
+    (db as { prepare: typeof db.prepare }).prepare = realPrepare;
+
+    const { entries } = logRepo.query({ types: ["upload"] });
+    expect(entries).toHaveLength(0);
   });
 });
 

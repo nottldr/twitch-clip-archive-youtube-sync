@@ -53,7 +53,19 @@ export function createEngineLogRepository(db: Database.Database) {
     );
   }
 
-  function query(filters: { types?: string[]; limit?: number; beforeId?: number }): {
+  function query(filters: {
+    types?: string[];
+    limit?: number;
+    beforeId?: number;
+    /** Filter to rows where clip_id matches. */
+    clipId?: string;
+    /** Inclusive lower bound on `timestamp`. Compare as text — SQLite ISO strings sort lexicographically. */
+    since?: string;
+    /** Exclusive upper bound on `timestamp`. */
+    until?: string;
+    /** Match rows whose `error` field starts with this code (e.g. "QUOTA_EXCEEDED"). */
+    errorCode?: string;
+  }): {
     entries: LogRow[];
     hasMore: boolean;
   } {
@@ -65,6 +77,27 @@ export function createEngineLogRepository(db: Database.Database) {
       const placeholders = filters.types.map(() => "?").join(", ");
       conditions.push(`type IN (${placeholders})`);
       params.push(...filters.types);
+    }
+
+    if (filters.clipId !== undefined) {
+      conditions.push("clip_id = ?");
+      params.push(filters.clipId);
+    }
+
+    if (filters.since !== undefined) {
+      conditions.push("timestamp >= ?");
+      params.push(filters.since);
+    }
+
+    if (filters.until !== undefined) {
+      conditions.push("timestamp < ?");
+      params.push(filters.until);
+    }
+
+    if (filters.errorCode !== undefined) {
+      // engine_log.error stores "<CODE>: <message>" — match by prefix to find by code.
+      conditions.push("error LIKE ?");
+      params.push(`${filters.errorCode}:%`);
     }
 
     if (filters.beforeId) {

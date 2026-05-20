@@ -177,24 +177,53 @@ Only restore from the SQL snapshot if data was corrupted in flight.
 
 #### Retry a single failed clip
 
-`POST /api/clips/:clipId/reset` then `POST /api/engine/trigger/:clipId`
-(planned: `POST /api/clips/:clipId/retry` will combine these into one).
+`POST /api/clips/:clipId/retry` — resets `sync_status='pending'`,
+`retry_count=0`, `last_error=null`, and nudges the engine to pick it up.
+Or do it from the admin UI: click a row to open the detail drawer →
+"Retry from scratch".
 
 #### Retry all failed clips
 
 `POST /api/engine/reset-failed`. Sends `CLIPS_CHANGED` to the engine so
 it'll start picking them up immediately if otherwise idle.
 
+#### Bulk action on a list of clips
+
+`POST /api/clips/bulk` with body
+`{ "action": "ignore" | "reset" | "retry", "clipIds": ["a", "b", …] }`.
+Atomic — either every listed row's mutation lands or none does. Use to
+ignore a batch of broken clips, retry a curated subset, etc.
+
 #### Mark a clip as ignored
 
-For a single clip there's no API yet — set `IGNORED_CLIP_IDS=clip1,clip2`
-in the environment and restart, OR mark via SQL:
+Single clip: `POST /api/clips/bulk` with `{ "action": "ignore", "clipIds": ["x"] }`,
+or open the detail drawer in the UI and click "Mark ignored". Persistent
+across imports: set `IGNORED_CLIP_IDS=clip1,clip2` in the env and restart.
 
-```bash
-sqlite3 data/sync.db "UPDATE clips SET sync_status='ignored' WHERE clip_id IN ('clip1','clip2')"
-```
+#### Find a specific clip's history
 
-(A bulk-action API endpoint is planned.)
+- UI: open the Clips page, click the row → detail drawer shows attempts +
+  log entries for that clip in one place.
+- API: `GET /api/clips/:clipId` returns clip + recent attempts + recent
+  log rows in one round trip. `GET /api/clips/:clipId/attempts` paginates.
+
+#### Search the audit log by clip or error code
+
+`GET /api/logs?clipId=abc123` — every recorded upload, system error, and
+state transition mentioning that clip.
+
+`GET /api/logs?errorCode=QUOTA_EXCEEDED&since=2026-05-01T00:00:00` — all
+quota-exhaustion events since a given date.
+
+Filter params: `clipId`, `errorCode`, `since`, `until`, `types`,
+`limit`, `before` (cursor).
+
+#### Export clips to CSV
+
+UI: Clips page → "Export CSV" (honors current status + search filters,
+exports every matching row, not just the visible page).
+
+API: `GET /api/clips/export?status=failed,uploaded&search=stream`.
 
 #### Reset everything (nuke and pave)
 
@@ -261,3 +290,16 @@ or commit messages. Append as phases land.
   enforce DB CHECK constraints; archive reader requires `.done` marker
   (or `READER_LEGACY_FRESHNESS_MS` fallback); single-flight OAuth token
   refresh.
+- **Phase 2 (visibility):** Per-clip detail drawer in the UI shows the
+  full attempt history, last error, retry count, and "retry from scratch"
+  / "mark ignored" buttons in one place. New API endpoints:
+  `GET /api/clips/:clipId` (detail), `GET /api/clips/:clipId/attempts`,
+  `POST /api/clips/:clipId/retry`, `POST /api/clips/bulk`,
+  `GET /api/clips/export` (server-side, honors filters). `/api/logs` now
+  accepts `clipId`/`errorCode`/`since`/`until` filters. New SSE events:
+  `clip:uploaded`, `clip:failed`, `clip:skipped`, `auth:lost`,
+  `auth:gained`. Targeted SSE-driven query invalidation replaces the
+  previous all-five-keys sledgehammer. Sticky pause/resume controls,
+  auth-required banner, toast notifications. New migration v5 adds
+  indexes on `upload_attempts(clip_id, started_at)` and
+  `engine_log(clip_id)`.
