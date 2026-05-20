@@ -95,6 +95,20 @@ export function ClipDetailDrawer({ clipId, onClose }: Props) {
     },
   });
 
+  // Force-upload — bypasses canUpload (quota / paused / awaitingAuth) and
+  // uploads this clip immediately via the machine's TRIGGER_CLIP event.
+  const forceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/engine/trigger/${clipId}`, { method: "POST" });
+      if (!res.ok) throw new Error(`Force upload failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["stats"] });
+      void refetch();
+    },
+  });
+
   const ignoreMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch("/api/clips/bulk", {
@@ -210,6 +224,16 @@ export function ClipDetailDrawer({ clipId, onClose }: Props) {
                 className="rounded border px-2 py-1 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-700"
               >
                 {retryMutation.isPending ? "Retrying…" : "Retry from scratch"}
+              </button>
+              <button
+                onClick={() => {
+                  forceMutation.mutate();
+                }}
+                disabled={forceMutation.isPending}
+                title="Upload this clip right now, ignoring quota / pause / auth state"
+                className="rounded border border-orange-300 px-2 py-1 text-orange-700 hover:bg-orange-50 disabled:opacity-50 dark:border-orange-700 dark:text-orange-200 dark:hover:bg-orange-900/40"
+              >
+                {forceMutation.isPending ? "Triggering…" : "Force upload now"}
               </button>
               {data.clip.sync_status !== "ignored" && (
                 <button

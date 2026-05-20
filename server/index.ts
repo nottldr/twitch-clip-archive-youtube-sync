@@ -20,6 +20,15 @@ import { createAuthManager, createDryRunAuthManager } from "#server/youtube/auth
 const config = loadConfig();
 const logger = createLogger("server");
 
+if (config.uploadConcurrency !== 1) {
+  // Setting >1 is currently a no-op because the machine has one upload path.
+  // Surface a warning so a misconfiguration isn't silent.
+  logger.warn(
+    { uploadConcurrency: config.uploadConcurrency },
+    "UPLOAD_CONCURRENCY is reserved and not yet honored — the engine still uploads one clip at a time. See README#operations.",
+  );
+}
+
 // Database
 const db = getDb(config.dataPath);
 const clipsRepo = createClipsRepository(db);

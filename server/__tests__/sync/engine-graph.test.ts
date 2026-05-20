@@ -10,13 +10,18 @@ const noopSideEffects = {
   onQuotaLimitExceeded: () => {},
 };
 
+const defaultDeps = {
+  uploadIntervalMs: 1000,
+  archivePollIntervalMs: 900_000,
+  quotaProbeIntervalMs: 15 * 60 * 1000,
+};
+
 function createTestMachine() {
   return createSyncMachine({
     isAuthenticated: () => true,
     canUpload: () => true,
     msUntilQuotaReset: () => 60_000,
-    uploadIntervalMs: 1000,
-    archivePollIntervalMs: 900_000,
+    ...defaultDeps,
     importArchive: async () => 10,
     discoverQuota: async () => 10_000,
     selectNextClip: async () => ({ clipId: "test-clip", clipTitle: "Test Clip" }),
@@ -30,8 +35,7 @@ function createNoClipsMachine() {
     isAuthenticated: () => true,
     canUpload: () => true,
     msUntilQuotaReset: () => 60_000,
-    uploadIntervalMs: 1000,
-    archivePollIntervalMs: 900_000,
+    ...defaultDeps,
     importArchive: async () => 0,
     discoverQuota: async () => null,
     selectNextClip: async () => null,
@@ -45,8 +49,7 @@ function createUnauthMachine() {
     isAuthenticated: () => false,
     canUpload: () => true,
     msUntilQuotaReset: () => 60_000,
-    uploadIntervalMs: 1000,
-    archivePollIntervalMs: 900_000,
+    ...defaultDeps,
     importArchive: async () => 0,
     discoverQuota: async () => null,
     selectNextClip: async () => null,
@@ -160,6 +163,7 @@ describe("sync machine structure", () => {
       msUntilQuotaReset: () => 60_000,
       uploadIntervalMs: 1000,
       archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
       importArchive: async () => 1,
       discoverQuota: async () => null,
       selectNextClip: async () => ({ clipId: "clip-1", clipTitle: "Test" }),
@@ -192,6 +196,7 @@ describe("sync machine structure", () => {
       msUntilQuotaReset: () => 60_000,
       uploadIntervalMs: 999_999, // long cooldown so it stays in waiting
       archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
       importArchive: async () => 1,
       discoverQuota: async () => null,
       selectNextClip: async () => ({ clipId: "clip-1", clipTitle: "Test" }),
@@ -224,6 +229,7 @@ describe("sync machine structure", () => {
       msUntilQuotaReset: () => 60_000,
       uploadIntervalMs: 1000,
       archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
       importArchive: async () => 1,
       discoverQuota: async () => null,
       selectNextClip: async () => ({ clipId: "clip-1", clipTitle: "Test" }),
@@ -254,6 +260,7 @@ describe("sync machine structure", () => {
       msUntilQuotaReset: () => 60_000,
       uploadIntervalMs: 1000,
       archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
       importArchive: async () => 1,
       discoverQuota: async () => null,
       selectNextClip: async () => ({ clipId: "clip-1", clipTitle: "Test" }),
@@ -285,6 +292,7 @@ describe("sync machine structure", () => {
       msUntilQuotaReset: () => 60_000,
       uploadIntervalMs: 1000,
       archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
       importArchive: async () => 1,
       discoverQuota: async () => null,
       selectNextClip: async () => ({ clipId: "clip-1", clipTitle: "Test" }),
@@ -319,6 +327,308 @@ describe("sync machine structure", () => {
     actor.stop();
   });
 
+  it("populates waitResumeAt on entry to waiting.quotaExhausted", async () => {
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => false, // forces straight to waiting.quotaExhausted
+      msUntilQuotaReset: () => 12 * 60 * 60 * 1000, // 12h until reset
+      uploadIntervalMs: 1000,
+      archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
+      importArchive: async () => 0,
+      discoverQuota: async () => null,
+      selectNextClip: async () => null,
+      performUpload: async () => ({ youtubeId: "fake", durationMs: 0 }),
+      ...noopSideEffects,
+    });
+
+    const before = Date.now();
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "quotaExhausted" } }));
+    const ctx = actor.getSnapshot().context;
+    expect(ctx.waitResumeAt).not.toBeNull();
+    const resumeAtMs = new Date(ctx.waitResumeAt ?? "").getTime();
+    expect(resumeAtMs).toBeGreaterThan(before);
+    actor.stop();
+  });
+
+  it("populates waitResumeAt on entry to waiting.noClips", async () => {
+    const machine = createNoClipsMachine();
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "noClips" } }));
+    const ctx = actor.getSnapshot().context;
+    expect(ctx.waitResumeAt).not.toBeNull();
+    // noClipsRetry is 30s
+    const expected = Date.now() + 30_000;
+    const actual = new Date(ctx.waitResumeAt ?? "").getTime();
+    expect(actual).toBeGreaterThan(expected - 2_000);
+    expect(actual).toBeLessThan(expected + 2_000);
+    actor.stop();
+  });
+
+  it("populates waitResumeAt on entry to waiting.cooldown after a successful upload", async () => {
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => true,
+      msUntilQuotaReset: () => 60_000,
+      uploadIntervalMs: 9_999_999, // very long so the test catches us in cooldown
+      archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
+      importArchive: async () => 1,
+      discoverQuota: async () => null,
+      selectNextClip: async () => ({ clipId: "c1", clipTitle: "c1" }),
+      performUpload: async () => ({ youtubeId: "yt-1", durationMs: 1 }),
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "cooldown" } }));
+    const ctx = actor.getSnapshot().context;
+    expect(ctx.waitResumeAt).not.toBeNull();
+    actor.stop();
+  });
+
+  it("clears waitResumeAt on entry to deciding", async () => {
+    const machine = createNoClipsMachine();
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    // Drive into noClips so waitResumeAt is set
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "noClips" } }));
+    expect(actor.getSnapshot().context.waitResumeAt).not.toBeNull();
+
+    // Send CLIPS_CHANGED to nudge back into deciding
+    actor.send({ type: "CLIPS_CHANGED" });
+    await waitFor(actor, (s) => s.matches({ active: "deciding" }));
+    expect(actor.getSnapshot().context.waitResumeAt).toBeNull();
+    actor.stop();
+  });
+
+  it("transitions from quotaExhausted to quotaProbing after the probe interval", async () => {
+    // canUpload returns false → machine sits in quotaExhausted.
+    const canUploadValue = false;
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => canUploadValue,
+      msUntilQuotaReset: () => 24 * 60 * 60 * 1000, // 24h — far away
+      ...defaultDeps,
+      quotaProbeIntervalMs: 100, // 100ms for fast test
+      importArchive: async () => 0,
+      discoverQuota: async () => null,
+      selectNextClip: async () => null, // no clips — probe goes to noClips
+      performUpload: async () => ({ youtubeId: "fake", durationMs: 0 }),
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "quotaExhausted" } }));
+    // After 100ms the probe fires → quotaProbing → deciding → (no clip) → noClips
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "noClips" } }), {
+      timeout: 1000,
+    });
+    expect(canUploadValue).toBe(false); // we never changed it; probe bypassed the gate
+    actor.stop();
+  });
+
+  it("probe upload succeeds → reaches cooldown (canUpload was bypassed)", async () => {
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      // canUpload is FALSE the whole time. Without the probe we'd stay in quotaExhausted forever.
+      canUpload: () => false,
+      msUntilQuotaReset: () => 24 * 60 * 60 * 1000,
+      ...defaultDeps,
+      quotaProbeIntervalMs: 100,
+      uploadIntervalMs: 9_999_999, // trap us in cooldown when probe succeeds
+      importArchive: async () => 1,
+      discoverQuota: async () => null,
+      selectNextClip: async () => ({ clipId: "probe-clip", clipTitle: "Probe" }),
+      performUpload: async () => ({ youtubeId: "yt-probe", durationMs: 1 }),
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "quotaExhausted" } }));
+    // probe interval elapses → quotaProbing → deciding (force=true) → uploading → cooldown
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "cooldown" } }), {
+      timeout: 2000,
+    });
+    actor.stop();
+  });
+
+  it("probe upload fails with QUOTA_EXCEEDED → back to quotaExhausted, and retries again", async () => {
+    let uploadAttempts = 0;
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => false,
+      msUntilQuotaReset: () => 24 * 60 * 60 * 1000,
+      ...defaultDeps,
+      quotaProbeIntervalMs: 80,
+      importArchive: async () => 1,
+      discoverQuota: async () => null,
+      selectNextClip: async () => ({ clipId: "probe-clip", clipTitle: "Probe" }),
+      // Probe also fails with QUOTA_EXCEEDED — quota is genuinely exhausted on YouTube too.
+      performUpload: async () => {
+        uploadAttempts++;
+        throw { error: "Quota exceeded", code: "QUOTA_EXCEEDED" };
+      },
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "quotaExhausted" } }));
+
+    // First probe fires after ~80ms. Wait long enough for two cycles (probe → quotaExhausted → probe again).
+    await new Promise((r) => setTimeout(r, 250));
+
+    // We should be back in quotaExhausted (each probe failed) and have attempted upload at least twice.
+    expect(actor.getSnapshot().matches({ active: { waiting: "quotaExhausted" } })).toBe(true);
+    expect(uploadAttempts).toBeGreaterThanOrEqual(2);
+    actor.stop();
+  });
+
+  it("forceNextUpload is cleared after the probe upload completes", async () => {
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => false,
+      msUntilQuotaReset: () => 24 * 60 * 60 * 1000,
+      ...defaultDeps,
+      quotaProbeIntervalMs: 100,
+      uploadIntervalMs: 9_999_999,
+      importArchive: async () => 1,
+      discoverQuota: async () => null,
+      selectNextClip: async () => ({ clipId: "c1", clipTitle: "c1" }),
+      performUpload: async () => ({ youtubeId: "yt-1", durationMs: 1 }),
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "cooldown" } }), { timeout: 2000 });
+    expect(actor.getSnapshot().context.forceNextUpload).toBe(false);
+    actor.stop();
+  });
+
+  it("TRIGGER_CLIP from waiting.quotaExhausted bypasses canUpload and starts an upload", async () => {
+    const uploadAttempts: string[] = [];
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => false, // pin in quotaExhausted
+      msUntilQuotaReset: () => 24 * 60 * 60 * 1000,
+      ...defaultDeps,
+      quotaProbeIntervalMs: 24 * 60 * 60 * 1000, // long so the probe doesn't interfere
+      uploadIntervalMs: 9_999_999,
+      importArchive: async () => 0,
+      discoverQuota: async () => null,
+      selectNextClip: async () => null,
+      performUpload: async (clipId) => {
+        uploadAttempts.push(clipId);
+        return { youtubeId: `yt-${clipId}`, durationMs: 1 };
+      },
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "quotaExhausted" } }));
+    actor.send({ type: "TRIGGER_CLIP", clipId: "force-me" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "cooldown" } }), { timeout: 1000 });
+    expect(uploadAttempts).toEqual(["force-me"]);
+    actor.stop();
+  });
+
+  it("TRIGGER_CLIP from waiting.noClips bypasses selectNextClip", async () => {
+    const uploadAttempts: string[] = [];
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => true,
+      msUntilQuotaReset: () => 60_000,
+      ...defaultDeps,
+      uploadIntervalMs: 9_999_999,
+      importArchive: async () => 0,
+      discoverQuota: async () => null,
+      selectNextClip: async () => null, // would normally trap us in noClips
+      performUpload: async (clipId) => {
+        uploadAttempts.push(clipId);
+        return { youtubeId: `yt-${clipId}`, durationMs: 1 };
+      },
+      ...noopSideEffects,
+    });
+
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "noClips" } }));
+    actor.send({ type: "TRIGGER_CLIP", clipId: "manual-1" });
+
+    await waitFor(actor, (s) => s.matches({ active: { waiting: "cooldown" } }), { timeout: 1000 });
+    expect(uploadAttempts).toEqual(["manual-1"]);
+    actor.stop();
+  });
+
+  it("TRIGGER_CLIP still works from blocked.userPaused (and returns to userPaused)", async () => {
+    const uploadAttempts: string[] = [];
+    const machine = createSyncMachine({
+      isAuthenticated: () => true,
+      canUpload: () => true,
+      msUntilQuotaReset: () => 60_000,
+      ...defaultDeps,
+      uploadIntervalMs: 9_999_999,
+      importArchive: async () => 0,
+      discoverQuota: async () => null,
+      selectNextClip: async () => null,
+      performUpload: async (clipId) => {
+        uploadAttempts.push(clipId);
+        return { youtubeId: `yt-${clipId}`, durationMs: 1 };
+      },
+      ...noopSideEffects,
+    });
+    // Configure machine to boot into userPaused
+    const actor = createActor(machine);
+    actor.start();
+    actor.send({ type: "START" });
+
+    await waitFor(actor, (s) => s.matches("active"));
+    actor.send({ type: "PAUSE" });
+    await waitFor(actor, (s) => s.matches({ active: { blocked: "userPaused" } }));
+
+    actor.send({ type: "TRIGGER_CLIP", clipId: "while-paused" });
+    // After upload completes, isUserPaused guard sends us back to userPaused (not cooldown)
+    await waitFor(
+      actor,
+      (s) => s.matches({ active: { blocked: "userPaused" } }) && uploadAttempts.length === 1,
+      {
+        timeout: 1000,
+      },
+    );
+    expect(uploadAttempts).toEqual(["while-paused"]);
+    actor.stop();
+  });
+
   it("AUTH_COMPLETE transitions to rediscovering (not deciding)", async () => {
     let discoveredCount = 0;
     const machine = createSyncMachine({
@@ -327,6 +637,7 @@ describe("sync machine structure", () => {
       msUntilQuotaReset: () => 60_000,
       uploadIntervalMs: 1000,
       archivePollIntervalMs: 900_000,
+      quotaProbeIntervalMs: 15 * 60 * 1000,
       importArchive: async () => 0,
       discoverQuota: async () => {
         discoveredCount++;

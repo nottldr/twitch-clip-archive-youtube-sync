@@ -54,6 +54,10 @@ const stateDisplayMap: Record<EngineStatePath, (ctx: EngineSnapshot["context"]) 
     colour: "bg-red-100 text-red-800",
     showCountdown: true,
   }),
+  "active.waiting.quotaProbing": () => ({
+    label: "Probing quota…",
+    colour: "bg-amber-100 text-amber-800 animate-pulse",
+  }),
   "active.waiting.uploadLimit": () => ({
     label: "Upload limit",
     colour: "bg-orange-100 text-orange-800",

@@ -61,6 +61,7 @@ export function createSyncEngine(
     msUntilQuotaReset: () => scheduler.msUntilQuotaReset(),
     uploadIntervalMs: config.uploadIntervalMs,
     archivePollIntervalMs: config.archivePollIntervalMs,
+    quotaProbeIntervalMs: config.quotaProbeIntervalMs,
     initialUserPaused: engineStateRepo.isUserPaused(),
 
     async importArchive() {
@@ -153,6 +154,7 @@ export function createSyncEngine(
   function resolveStatePath(s: MachineSnapshot): EngineStatePath {
     if (s.matches({ active: { waiting: "quotaExhausted" } }))
       return "active.waiting.quotaExhausted";
+    if (s.matches({ active: { waiting: "quotaProbing" } })) return "active.waiting.quotaProbing";
     if (s.matches({ active: { waiting: "uploadLimit" } })) return "active.waiting.uploadLimit";
     if (s.matches({ active: { waiting: "cooldown" } })) return "active.waiting.cooldown";
     if (s.matches({ active: { waiting: "noClips" } })) return "active.waiting.noClips";

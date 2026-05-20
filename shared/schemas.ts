@@ -46,6 +46,7 @@ export const EngineStatePathSchema = z.enum([
   "active.reimporting",
   "active.rediscovering",
   "active.waiting.quotaExhausted",
+  "active.waiting.quotaProbing",
   "active.waiting.uploadLimit",
   "active.waiting.cooldown",
   "active.waiting.noClips",

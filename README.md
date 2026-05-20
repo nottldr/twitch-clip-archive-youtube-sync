@@ -96,6 +96,8 @@ See [.env.example](./.env.example) for all available variables. Key ones:
 | `UPLOAD_COST`                              | `100`                | Quota units per upload (YouTube's published cost is 1600; this is intentionally conservative for older keys — adjust if your project has a different cost).                                                                                               |
 | `UPLOAD_INTERVAL_MS`                       | `10000`              | Cooldown between consecutive uploads.                                                                                                                                                                                                                     |
 | `ARCHIVE_POLL_INTERVAL_MS`                 | `900000`             | How often to re-scan the archive dump (15 min by default).                                                                                                                                                                                                |
+| `QUOTA_PROBE_INTERVAL_MS`                  | `900000`             | After hitting `quotaExhausted`, how long to wait before attempting one upload to probe whether YouTube actually still rejects (15 min by default). Capped at `msUntilMidnightPT` so an idle engine probes immediately after the daily reset.              |
+| `UPLOAD_CONCURRENCY`                       | `1`                  | _Reserved._ Setting `>1` currently logs a warning and has no effect — concurrent uploads require a Redis or `BEGIN IMMEDIATE` lock around the quota gate first (see [Operations](#operations)).                                                           |
 | `READER_LEGACY_FRESHNESS_MS`               | _unset_              | If set, the archive reader falls back to picking the newest dump older than this many ms instead of requiring a `.done` marker file. Use only when the upstream writer can't yet emit markers. See [Archive dump consumption](#archive-dump-consumption). |
 | `MAX_RETRY_COUNT`                          | `3`                  | Times to retry a failed clip before parking it.                                                                                                                                                                                                           |
 | `LOG_LEVEL`                                | `info`               | Pino log level (`trace`/`debug`/`info`/`warn`/`error`).                                                                                                                                                                                                   |
@@ -225,6 +227,21 @@ exports every matching row, not just the visible page).
 
 API: `GET /api/clips/export?status=failed,uploaded&search=stream`.
 
+#### Force-upload a single clip immediately
+
+Use when you need to upload a specific clip regardless of the current engine
+state — paused, awaiting auth, or quota-exhausted. The trigger bypasses
+`canUpload` and skips `selectNextClip`, going straight to the upload path
+with the given clip ID.
+
+UI: open the detail drawer for the clip → "Force upload now" (orange button).
+
+API: `POST /api/engine/trigger/:clipId`.
+
+After the upload concludes, the machine routes back through cooldown into
+its normal state machine. If the engine was previously paused, it stays
+paused after the forced upload.
+
 #### Reset everything (nuke and pave)
 
 `POST /api/engine/reset-all`. Resets all non-`ignored` clips to `pending`,
@@ -254,8 +271,13 @@ Check `GET /api/engine/status`:
 - `active.uploading` for >10 min on the same clip → the upload is likely
   hung. Restart the container; `resetInterrupted` will recover correctly
   (preserves `youtube_id` if it was set, otherwise resets to `pending`).
-- `active.waiting.quotaExhausted` → expected after hitting the daily cap;
-  resolves on its own at midnight PT.
+- `active.waiting.quotaExhausted` → expected after hitting the daily cap.
+  Resolves naturally at midnight PT, but the engine also probes YouTube
+  every `QUOTA_PROBE_INTERVAL_MS` (default 15 min) by attempting one
+  upload — if YouTube accepts, the engine resumes; if not, it returns to
+  `quotaExhausted` for another probe interval.
+- `active.waiting.quotaProbing` → transient: the engine is currently
+  attempting a probe upload while quota was thought to be exhausted.
 - `active.waiting.error` → check `GET /api/logs?types=error` for the
   most recent error.
 - `active.blocked.awaitingAuth` → see [Recover when OAuth is lost](#recover-when-oauth-is-lost).
@@ -303,3 +325,14 @@ or commit messages. Append as phases land.
   auth-required banner, toast notifications. New migration v5 adds
   indexes on `upload_attempts(clip_id, started_at)` and
   `engine_log(clip_id)`.
+- **Phase 3 (orchestration polish):** Active quota probe — after
+  `QUOTA_PROBE_INTERVAL_MS` (default 15 min) in `quotaExhausted`, the
+  engine probes YouTube directly by attempting one upload. If it
+  succeeds, normal flow resumes; if it fails with `QUOTA_EXCEEDED`, back
+  to `quotaExhausted` for another probe interval. New machine state
+  `active.waiting.quotaProbing`. Force-upload (`POST /api/engine/trigger/:clipId`)
+  now works from any active substate, not just `blocked.userPaused` —
+  bypasses `canUpload`, quota gates, and pause state. `waitResumeAt`
+  populated on entry to every wait state so the UI countdown works
+  everywhere. `UPLOAD_CONCURRENCY` env var reserved (no behavior change
+  yet; logs a warning if set >1).

@@ -76,6 +76,21 @@ export function loadConfig() {
     uploadIntervalMs: optionalInt("UPLOAD_INTERVAL_MS", 10000),
     archivePollIntervalMs: optionalInt("ARCHIVE_POLL_INTERVAL_MS", 900000),
     /**
+     * How long the engine sits in `waiting.quotaExhausted` before probing
+     * YouTube directly. Default 15 min; capped at midnight-PT (the natural
+     * daily quota reset) so an idle engine probes immediately after reset.
+     */
+    quotaProbeIntervalMs: optionalInt("QUOTA_PROBE_INTERVAL_MS", 15 * 60 * 1000),
+    /**
+     * Reserved for a future concurrent-uploads implementation. Currently the
+     * XState machine has only one upload path, so concurrency is effectively 1.
+     * Raising this value without a Redis-level (or `BEGIN IMMEDIATE`) lock
+     * around the quota gate would race: two parallel uploads can both pass
+     * `canUpload`, both burn quota, and over-spend by 1× per extra worker. See
+     * README#operations for the design notes before enabling.
+     */
+    uploadConcurrency: optionalInt("UPLOAD_CONCURRENCY", 1),
+    /**
      * Optional fallback for archive readers whose upstream writer doesn't yet
      * emit a `.done` marker file alongside each dump. When set, the reader
      * picks the newest dump older than this many ms instead of requiring a

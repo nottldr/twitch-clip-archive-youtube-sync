@@ -9,6 +9,12 @@ export type SyncContext = EngineSnapshot["context"] & {
   debugForceFailNextUpload: boolean;
   debugForceQuotaExhausted: boolean;
   debugForceUploadLimit: boolean;
+  /**
+   * One-shot flag set by the quota probe (and force-upload paths) that
+   * lets the next deciding pass bypass `canUpload`. Cleared automatically
+   * when an upload concludes or the machine enters a waiting substate.
+   */
+  forceNextUpload: boolean;
 };
 
 export const initialContext: SyncContext = {
@@ -27,6 +33,7 @@ export const initialContext: SyncContext = {
   debugForceFailNextUpload: false,
   debugForceQuotaExhausted: false,
   debugForceUploadLimit: false,
+  forceNextUpload: false,
 };
 
 export type SyncEvent =
@@ -65,6 +72,8 @@ export interface SyncMachineDeps {
   // Config
   uploadIntervalMs: number;
   archivePollIntervalMs: number;
+  /** How long the machine sits in `waiting.quotaExhausted` before probing YouTube again. */
+  quotaProbeIntervalMs: number;
   initialUserPaused?: boolean;
 
   // Actors (async operations)
@@ -85,13 +94,15 @@ export interface SyncMachineDeps {
 }
 
 export function createSyncMachine(deps: SyncMachineDeps) {
-  // Reusable context updater: clear upload fields
+  // Reusable context updater: clear upload fields (also consumes any one-shot
+  // force-upload flag since the upload has now concluded).
   const clearUpload = (draft: SyncContext) => {
     draft.clipId = null;
     draft.clipTitle = null;
     draft.uploadStartedAt = null;
     draft.bytesTransferred = null;
     draft.totalBytes = null;
+    draft.forceNextUpload = false;
   };
 
   return setup({
@@ -104,8 +115,19 @@ export function createSyncMachine(deps: SyncMachineDeps) {
     guards: {
       isAuthenticated: () => deps.isAuthenticated(),
       notAuthenticated: () => !deps.isAuthenticated(),
-      canUpload: ({ context }) => !context.debugForceQuotaExhausted && deps.canUpload(),
-      cantUpload: ({ context }) => context.debugForceQuotaExhausted || !deps.canUpload(),
+      // forceNextUpload overrides everything (manual trigger / quota probe);
+      // debugForceQuotaExhausted simulates a quota-exhausted state for testing;
+      // otherwise we trust the scheduler's local accounting.
+      canUpload: ({ context }) => {
+        if (context.forceNextUpload) return true;
+        if (context.debugForceQuotaExhausted) return false;
+        return deps.canUpload();
+      },
+      cantUpload: ({ context }) => {
+        if (context.forceNextUpload) return false;
+        if (context.debugForceQuotaExhausted) return true;
+        return !deps.canUpload();
+      },
       isUserPaused: ({ context }) => context.userPaused,
       isQuotaError: ({ event }) =>
         event.type === "UPLOAD_FAILED" && event.code === "QUOTA_EXCEEDED",
@@ -115,7 +137,10 @@ export function createSyncMachine(deps: SyncMachineDeps) {
     },
     delays: {
       uploadCooldown: () => deps.uploadIntervalMs,
-      quotaReset: () => Math.min(deps.msUntilQuotaReset(), 60_000),
+      // Time spent in quotaExhausted before probing YouTube directly. Capped at
+      // msUntilQuotaReset so a probe runs immediately after the daily reset
+      // even if the configured probe interval is longer.
+      quotaProbe: () => Math.min(deps.quotaProbeIntervalMs, deps.msUntilQuotaReset()),
       uploadLimitRetry: 60 * 60 * 1000,
       noClipsRetry: 30_000,
       errorRetry: 60_000,
@@ -279,6 +304,27 @@ export function createSyncMachine(deps: SyncMachineDeps) {
           DISCOVER_NOW: ".rediscovering",
           CLIPS_CHANGED: ".deciding",
           QUOTA_RESET: ".deciding",
+          /**
+           * Force-upload from anywhere in `active.*` (cooldown, quotaExhausted,
+           * awaitingAuth, userPaused, etc.). Skips `selectNextClip` by setting
+           * the clipId directly. Bypasses canUpload because we target `uploading`
+           * directly rather than going through `deciding`'s guards. After the
+           * upload concludes, the UPLOAD_COMPLETE / UPLOAD_FAILED handlers route
+           * back via cooldown (or back to userPaused if the user paused
+           * separately — see the isUserPaused guard).
+           */
+          TRIGGER_CLIP: {
+            target: ".uploading",
+            actions: assign(({ context, event }) =>
+              produce(context, (draft) => {
+                draft.clipId = event.clipId;
+                draft.clipTitle = event.clipId;
+                draft.uploadStartedAt = new Date().toISOString();
+                draft.bytesTransferred = 0;
+                draft.totalBytes = null;
+              }),
+            ),
+          },
         },
         states: {
           blocked: {
@@ -297,18 +343,8 @@ export function createSyncMachine(deps: SyncMachineDeps) {
                       }),
                     ),
                   },
-                  TRIGGER_CLIP: {
-                    target: "#sync.active.uploading",
-                    actions: assign(({ context, event }) =>
-                      produce(context, (draft) => {
-                        draft.clipId = event.clipId;
-                        draft.clipTitle = event.clipId;
-                        draft.uploadStartedAt = new Date().toISOString();
-                        draft.bytesTransferred = 0;
-                        draft.totalBytes = null;
-                      }),
-                    ),
-                  },
+                  // TRIGGER_CLIP is handled at the active-state level — it
+                  // applies to every active.* substate including this one.
                 },
               },
             },
@@ -518,11 +554,76 @@ export function createSyncMachine(deps: SyncMachineDeps) {
           waiting: {
             initial: "cooldown",
             states: {
-              quotaExhausted: { after: { quotaReset: "#sync.active.deciding" } },
-              uploadLimit: { after: { uploadLimitRetry: "#sync.active.deciding" } },
-              cooldown: { after: { uploadCooldown: "#sync.active.deciding" } },
-              noClips: { after: { noClipsRetry: "#sync.active.deciding" } },
-              error: { after: { errorRetry: "#sync.active.deciding" } },
+              // Each substate sets context.waitResumeAt to the wall-clock time
+              // at which its `after` will fire, so the UI can render a real
+              // countdown across every wait state (was always null pre-3.3).
+              // Entry also clears `forceNextUpload` so a probe/trigger that
+              // ended in a wait doesn't leave the flag stuck.
+              quotaExhausted: {
+                entry: assign(({ context }) =>
+                  produce(context, (draft) => {
+                    const ms = Math.min(deps.quotaProbeIntervalMs, deps.msUntilQuotaReset());
+                    draft.waitResumeAt = new Date(Date.now() + ms).toISOString();
+                    draft.forceNextUpload = false;
+                  }),
+                ),
+                after: { quotaProbe: "#sync.active.waiting.quotaProbing" },
+              },
+              /**
+               * Active probe: set forceNextUpload=true and re-enter the
+               * decision flow. The next upload bypasses canUpload, asks YouTube
+               * directly, and either succeeds (machine resumes normally) or
+               * fails with QUOTA_EXCEEDED and lands back in quotaExhausted for
+               * another probe interval.
+               *
+               * Per-job concern: only one probe runs at a time because the
+               * machine has only one `deciding`→`uploading` path.
+               */
+              quotaProbing: {
+                entry: assign(({ context }) =>
+                  produce(context, (draft) => {
+                    draft.waitResumeAt = null;
+                    draft.forceNextUpload = true;
+                  }),
+                ),
+                always: "#sync.active.deciding",
+              },
+              uploadLimit: {
+                entry: assign(({ context }) =>
+                  produce(context, (draft) => {
+                    draft.waitResumeAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+                    draft.forceNextUpload = false;
+                  }),
+                ),
+                after: { uploadLimitRetry: "#sync.active.deciding" },
+              },
+              cooldown: {
+                entry: assign(({ context }) =>
+                  produce(context, (draft) => {
+                    draft.waitResumeAt = new Date(Date.now() + deps.uploadIntervalMs).toISOString();
+                    draft.forceNextUpload = false;
+                  }),
+                ),
+                after: { uploadCooldown: "#sync.active.deciding" },
+              },
+              noClips: {
+                entry: assign(({ context }) =>
+                  produce(context, (draft) => {
+                    draft.waitResumeAt = new Date(Date.now() + 30_000).toISOString();
+                    draft.forceNextUpload = false;
+                  }),
+                ),
+                after: { noClipsRetry: "#sync.active.deciding" },
+              },
+              error: {
+                entry: assign(({ context }) =>
+                  produce(context, (draft) => {
+                    draft.waitResumeAt = new Date(Date.now() + 60_000).toISOString();
+                    draft.forceNextUpload = false;
+                  }),
+                ),
+                after: { errorRetry: "#sync.active.deciding" },
+              },
             },
           },
         },
