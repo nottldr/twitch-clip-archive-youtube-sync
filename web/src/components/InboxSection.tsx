@@ -1,9 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-
-import { fetchJson } from "#web/lib/api.js";
+import { useRetryClip } from "#web/lib/mutations.js";
+import { useRecentActivity } from "#web/lib/queries.js";
 import { ageMs, formatTimeAgo, useTick } from "#web/lib/time.js";
-import { useToast } from "#web/lib/toast.js";
-import { type EngineSnapshot, RecentActivitySchema } from "#web/lib/types.js";
+import type { EngineSnapshot } from "#web/lib/types.js";
 
 import { EmptyState } from "./ui/EmptyState.js";
 
@@ -16,31 +14,8 @@ interface Props {
 export function InboxSection({ engine }: Props) {
   // Relative timestamps in this section want to stay roughly fresh.
   useTick(15_000);
-  const queryClient = useQueryClient();
-  const { notify } = useToast();
-
-  const { data: activity } = useQuery({
-    queryKey: ["activity", "inbox"],
-    queryFn: () => fetchJson("/api/activity?limit=30", RecentActivitySchema),
-    refetchInterval: 30_000,
-  });
-
-  const retryMutation = useMutation({
-    mutationFn: async (clipId: string) => {
-      const res = await fetch(`/api/clips/${clipId}/retry`, { method: "POST" });
-      if (!res.ok) throw new Error(`Retry failed: ${res.status}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      notify("success", "Retry queued");
-      void queryClient.invalidateQueries({ queryKey: ["clips"] });
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-      void queryClient.invalidateQueries({ queryKey: ["activity"] });
-    },
-    onError: (err) => {
-      notify("error", err instanceof Error ? err.message : "Retry failed");
-    },
-  });
+  const { data: activity } = useRecentActivity(30);
+  const retryMutation = useRetryClip();
 
   const failedClips = (activity ?? []).filter((c) => c.sync_status === "failed").slice(0, 5);
 

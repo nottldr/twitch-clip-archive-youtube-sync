@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClipDetailDrawer } from "#web/components/ClipDetailDrawer.js";
@@ -10,55 +10,47 @@ import { Skeleton } from "#web/components/ui/Skeleton.js";
 import { Toolbar } from "#web/components/ui/Toolbar.js";
 import { useRowKeyboardNav } from "#web/hooks/use-row-keyboard-nav.js";
 import { useRowSelection } from "#web/hooks/use-row-selection.js";
-import { fetchJson } from "#web/lib/api.js";
+import { useBulkClipAction, useRetryClip } from "#web/lib/mutations.js";
+import { useClipsList, useStats } from "#web/lib/queries.js";
 import { useToast } from "#web/lib/toast.js";
-import { DashboardStatsSchema, PaginatedClipsSchema } from "#web/lib/types.js";
 
 const ALL_STATUSES = ["pending", "uploading", "uploaded", "failed", "skipped", "ignored"] as const;
 
-type SortBy = "created_at" | "title" | "sync_status" | "retry_count";
-type SortOrder = "asc" | "desc";
-type BulkAction = "retry" | "reset" | "ignore";
-
-function toSortBy(value: string): SortBy {
-  switch (value) {
-    case "title":
-    case "sync_status":
-    case "retry_count":
-    case "created_at":
-      return value;
-    default:
-      return "created_at";
-  }
-}
-
 export function Queue() {
-  const [page, setPage] = useState(1);
-  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(ALL_STATUSES));
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<SortBy>("created_at");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
+  const search = useSearch({ from: "/queue" });
+  const navigate = useNavigate({ from: "/queue" });
+
+  const [searchInput, setSearchInput] = useState(search.search);
   const [drawerClipId, setDrawerClipId] = useState<string | null>(null);
 
-  const queryClient = useQueryClient();
   const { notify } = useToast();
   const selection = useRowSelection();
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Debounce search input so typing doesn't hammer the API every keystroke.
+  // Sync URL changes (back/forward, deep link) back into the local input.
   useEffect(() => {
+    setSearchInput(search.search);
+  }, [search.search]);
+
+  // Debounce: when the input differs from the URL, push to URL after 300ms.
+  useEffect(() => {
+    if (searchInput === search.search) return;
     const t = setTimeout(() => {
-      setSearch(searchInput);
-      setPage(1);
+      void navigate({
+        search: (prev) => ({ ...prev, search: searchInput, page: 1 }),
+      });
     }, 300);
     return () => {
       clearTimeout(t);
     };
-  }, [searchInput]);
+  }, [searchInput, search.search, navigate]);
 
   // `/` to focus search, Esc to clear selection / blur search. (j/k row nav
-  // lives in useRowKeyboardNav below.)
+  // lives in useRowKeyboardNav below.) Stable ref pattern: the listener is
+  // attached once and reads the latest state via refs, so we don't churn
+  // window listeners on every selection toggle.
+  const escStateRef = useRef({ selectionSize: 0, drawerClipId: null as string | null });
+  escStateRef.current = { selectionSize: selection.size, drawerClipId };
   useEffect(() => {
     function handler(e: KeyboardEvent) {
       const target = e.target;
@@ -72,7 +64,7 @@ export function Queue() {
       } else if (e.key === "Escape") {
         if (searchRef.current && document.activeElement === searchRef.current) {
           searchRef.current.blur();
-        } else if (selection.size > 0 && !drawerClipId) {
+        } else if (escStateRef.current.selectionSize > 0 && !escStateRef.current.drawerClipId) {
           selection.clear();
         }
       }
@@ -81,88 +73,46 @@ export function Queue() {
     return () => {
       window.removeEventListener("keydown", handler);
     };
-  }, [selection, drawerClipId]);
+  }, [selection]);
 
-  const { data: stats } = useQuery({
-    queryKey: ["stats"],
-    queryFn: () => fetchJson("/api/stats", DashboardStatsSchema),
-  });
+  const { data: stats } = useStats();
 
+  // Status: array in URL, Set in component (for fast .has() in render).
+  // `undefined` URL value means "all selected" — keeps the URL clean when at
+  // the default ("show everything").
+  const selectedStatuses = useMemo<Set<string>>(
+    () => new Set(search.status ?? ALL_STATUSES),
+    [search.status],
+  );
   const statusParam = [...selectedStatuses].join(",");
 
-  const params = new URLSearchParams();
-  params.set("page", String(page));
-  params.set("pageSize", "50");
-  params.set("sortBy", sortBy);
-  params.set("sortOrder", sortOrder);
-  if (statusParam && selectedStatuses.size < ALL_STATUSES.length) {
-    params.set("status", statusParam);
-  }
-  if (search) {
-    params.set("search", search);
-  }
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["clips", page, statusParam, search, sortBy, sortOrder],
-    queryFn: () => fetchJson(`/api/clips?${params.toString()}`, PaginatedClipsSchema),
+  const { data, isLoading } = useClipsList({
+    page: search.page,
+    pageSize: 50,
+    statusParam,
+    totalStatuses: ALL_STATUSES.length,
+    search: search.search,
+    sortBy: search.sortBy,
+    sortOrder: search.sortOrder,
   });
 
-  const retryMutation = useMutation({
-    mutationFn: async (clipId: string) => {
-      const res = await fetch(`/api/clips/${clipId}/retry`, { method: "POST" });
-      if (!res.ok) throw new Error(`Retry failed: ${res.status}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["clips"] });
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-    },
-  });
-
-  const bulkMutation = useMutation({
-    mutationFn: async (input: { action: BulkAction; clipIds: string[] }) => {
-      const res = await fetch("/api/clips/bulk", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      if (!res.ok) throw new Error(`Bulk ${input.action} failed: ${res.status}`);
-      const body: unknown = await res.json();
-      const affected =
-        typeof body === "object" &&
-        body !== null &&
-        "affected" in body &&
-        typeof body.affected === "number"
-          ? body.affected
-          : 0;
-      return { affected };
-    },
-    onSuccess: (result, input) => {
-      notify(
-        "success",
-        `${input.action === "ignore" ? "Ignored" : input.action === "retry" ? "Retried" : "Reset"} ${result.affected.toLocaleString()} clip${result.affected === 1 ? "" : "s"}`,
-      );
-      selection.clear();
-      void queryClient.invalidateQueries({ queryKey: ["clips"] });
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-      void queryClient.invalidateQueries({ queryKey: ["activity"] });
-    },
-    onError: (err) => {
-      notify("error", err instanceof Error ? err.message : "Bulk action failed");
-    },
-  });
+  const retryMutation = useRetryClip();
+  const bulkMutation = useBulkClipAction();
 
   function toggleStatus(status: string) {
-    setSelectedStatuses((prev) => {
-      const next = new Set(prev);
-      if (next.has(status)) {
-        next.delete(status);
-      } else {
-        next.add(status);
-      }
-      return next;
+    const next = new Set(selectedStatuses);
+    if (next.has(status)) next.delete(status);
+    else next.add(status);
+    const arr = [...next].filter((s): s is (typeof ALL_STATUSES)[number] =>
+      (ALL_STATUSES as readonly string[]).includes(s),
+    );
+    void navigate({
+      search: (prev) => ({
+        ...prev,
+        status: arr.length === ALL_STATUSES.length ? undefined : arr,
+        page: 1,
+      }),
     });
-    setPage(1);
   }
 
   function handleCopyLinks() {
@@ -180,7 +130,7 @@ export function Queue() {
     if (statusParam && selectedStatuses.size < ALL_STATUSES.length) {
       exportParams.set("status", statusParam);
     }
-    if (search) exportParams.set("search", search);
+    if (search.search) exportParams.set("search", search.search);
     const url = `/api/clips/export?${exportParams.toString()}`;
     const a = document.createElement("a");
     a.href = url;
@@ -211,6 +161,17 @@ export function Queue() {
     activeId: drawerClipId,
     onChange: setDrawerClipId,
   });
+
+  function runBulk(action: "retry" | "reset" | "ignore") {
+    bulkMutation.mutate(
+      { action, clipIds: [...selection.selected] },
+      {
+        onSuccess: () => {
+          selection.clear();
+        },
+      },
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -284,15 +245,20 @@ export function Queue() {
         ) : data ? (
           <ClipTable
             data={data}
-            sortBy={sortBy}
-            sortOrder={sortOrder}
+            sortBy={search.sortBy}
+            sortOrder={search.sortOrder}
             onSortChange={(by, order) => {
-              setSortBy(toSortBy(by));
-              setSortOrder(order);
-              setPage(1);
+              void navigate({
+                search: (prev) => ({
+                  ...prev,
+                  sortBy: toSortBy(by),
+                  sortOrder: order,
+                  page: 1,
+                }),
+              });
             }}
             onPageChange={(p) => {
-              setPage(p);
+              void navigate({ search: (prev) => ({ ...prev, page: p }) });
             }}
             onRetry={(clipId) => {
               retryMutation.mutate(clipId);
@@ -324,21 +290,21 @@ export function Queue() {
               label="Retry"
               disabled={bulkMutation.isPending}
               onClick={() => {
-                bulkMutation.mutate({ action: "retry", clipIds: [...selection.selected] });
+                runBulk("retry");
               }}
             />
             <BulkButton
               label="Reset"
               disabled={bulkMutation.isPending}
               onClick={() => {
-                bulkMutation.mutate({ action: "reset", clipIds: [...selection.selected] });
+                runBulk("reset");
               }}
             />
             <BulkButton
               label="Ignore"
               disabled={bulkMutation.isPending}
               onClick={() => {
-                bulkMutation.mutate({ action: "ignore", clipIds: [...selection.selected] });
+                runBulk("ignore");
               }}
             />
           </>
@@ -353,6 +319,18 @@ export function Queue() {
       />
     </div>
   );
+}
+
+function toSortBy(value: string): "created_at" | "title" | "sync_status" | "retry_count" {
+  switch (value) {
+    case "title":
+    case "sync_status":
+    case "retry_count":
+    case "created_at":
+      return value;
+    default:
+      return "created_at";
+  }
 }
 
 function BulkButton({

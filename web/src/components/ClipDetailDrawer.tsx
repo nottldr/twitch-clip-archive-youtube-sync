@@ -1,10 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "@tanstack/react-router";
 
 import { ClipDetailContent } from "#web/components/ClipDetailContent.js";
-import { fetchJson } from "#web/lib/api.js";
-import { ClipDetailSchema } from "#web/lib/types.js";
+import { useClipDetail } from "#web/lib/queries.js";
 
 interface Props {
   clipId: string | null;
@@ -12,16 +9,7 @@ interface Props {
 }
 
 export function ClipDetailDrawer({ clipId, onClose }: Props) {
-  const { data, isLoading, refetch } = useQuery({
-    enabled: !!clipId,
-    queryKey: ["clips", clipId],
-    queryFn: () => fetchJson(`/api/clips/${clipId}`, ClipDetailSchema),
-  });
-
-  // Keep the drawer in sync with SSE-driven refetches of the clips list.
-  useEffect(() => {
-    if (clipId) void refetch();
-  }, [clipId, refetch]);
+  const { data, isLoading } = useClipDetail(clipId);
 
   if (!clipId) return null;
 
@@ -39,7 +27,8 @@ export function ClipDetailDrawer({ clipId, onClose }: Props) {
           </h2>
           <div className="flex shrink-0 items-center gap-1">
             <Link
-              to={`/clips/${clipId}`}
+              to="/clips/$clipId"
+              params={{ clipId }}
               onClick={onClose}
               className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/40"
               title="Open in a full-page view"
@@ -62,13 +51,7 @@ export function ClipDetailDrawer({ clipId, onClose }: Props) {
           <div className="p-4 text-red-500">Clip not found</div>
         ) : (
           <div className="p-4">
-            <ClipDetailContent
-              clipId={clipId}
-              data={data}
-              onRefetch={() => {
-                void refetch();
-              }}
-            />
+            <ClipDetailContent clipId={clipId} data={data} />
           </div>
         )}
       </aside>

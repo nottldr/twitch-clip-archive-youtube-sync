@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { InboxSection } from "#web/components/InboxSection.js";
@@ -6,19 +5,11 @@ import { NowSection } from "#web/components/NowSection.js";
 import { QuotaWidget } from "#web/components/QuotaWidget.js";
 import { PageHeader } from "#web/components/ui/PageHeader.js";
 import { Skeleton, SkeletonRow } from "#web/components/ui/Skeleton.js";
-import { fetchJson } from "#web/lib/api.js";
-import { DashboardStatsSchema, QuotaHistorySchema } from "#web/lib/types.js";
+import { useQuotaHistory, useStats } from "#web/lib/queries.js";
 
 export function Dashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["stats"],
-    queryFn: () => fetchJson("/api/stats", DashboardStatsSchema),
-  });
-
-  const { data: history } = useQuery({
-    queryKey: ["quota", "history"],
-    queryFn: () => fetchJson("/api/quota/history?days=30", QuotaHistorySchema),
-  });
+  const { data: stats } = useStats();
+  const { data: history } = useQuotaHistory(30);
 
   if (!stats) {
     return (

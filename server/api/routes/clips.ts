@@ -16,13 +16,19 @@ const BulkActionRequestSchema = z.object({
 
 function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return "";
-  // Narrow to primitives so we never silently emit "[object Object]".
-  const s =
-    typeof value === "string"
-      ? value
-      : typeof value === "number" || typeof value === "boolean" || typeof value === "bigint"
-        ? String(value)
-        : JSON.stringify(value);
+  // Reject anything that isn't a clean primitive instead of silently
+  // emitting "[object Object]" or some JSON.stringify approximation. If a
+  // future column adds structured data, the caller should flatten it
+  // explicitly — failing loudly here makes that obvious.
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    typeof value !== "boolean" &&
+    typeof value !== "bigint"
+  ) {
+    throw new TypeError(`csvEscape: refusing to stringify ${typeof value} value`);
+  }
+  const s = typeof value === "string" ? value : String(value);
   if (s.includes(",") || s.includes('"') || s.includes("\n")) {
     return `"${s.replaceAll('"', '""')}"`;
   }

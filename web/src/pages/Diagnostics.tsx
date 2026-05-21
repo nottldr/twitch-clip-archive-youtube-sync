@@ -1,20 +1,18 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { EngineStateIndicator } from "#web/components/EngineStateIndicator.js";
 import { ConfirmDialog } from "#web/components/ui/ConfirmDialog.js";
 import { PageHeader } from "#web/components/ui/PageHeader.js";
 import { Skeleton } from "#web/components/ui/Skeleton.js";
-import { fetchJson } from "#web/lib/api.js";
-import { formatTimeAgo, formatTimeUntil, useTick } from "#web/lib/time.js";
-import { useToast } from "#web/lib/toast.js";
+import { useAdminAction } from "#web/lib/mutations.js";
 import {
-  DashboardStatsSchema,
-  DebugFlagsSchema,
-  EngineSnapshotSchema,
-  OAuthStatusSchema,
-  QuotaHistorySchema,
-} from "#web/lib/types.js";
+  useDebugFlags,
+  useEngineSnapshot,
+  useOAuthStatus,
+  useQuotaHistory,
+  useStats,
+} from "#web/lib/queries.js";
+import { formatTimeAgo, formatTimeUntil, useTick } from "#web/lib/time.js";
 
 const FAULT_INJECTION_ENABLED = import.meta.env.VITE_ENABLE_FAULT_INJECTION === "true";
 
@@ -87,60 +85,29 @@ const FAULT_INJECTION_GROUP: ActionGroup = {
 
 export function Diagnostics() {
   const [pendingConfirm, setPendingConfirm] = useState<ActionButton | null>(null);
-  const [lastResult, setLastResult] = useState<string | null>(null);
-  const queryClient = useQueryClient();
-  const { notify } = useToast();
 
-  const { data: stats } = useQuery({
-    queryKey: ["stats"],
-    queryFn: () => fetchJson("/api/stats", DashboardStatsSchema),
-  });
+  const { data: stats } = useStats();
+  const { data: snapshot } = useEngineSnapshot({ refetchInterval: 2000 });
+  const { data: history } = useQuotaHistory(7);
+  const { data: oauth } = useOAuthStatus();
+  const { data: flags } = useDebugFlags();
+  const adminMutation = useAdminAction();
 
-  const { data: snapshot } = useQuery({
-    queryKey: ["engine", "status"],
-    queryFn: () => fetchJson("/api/engine/status", EngineSnapshotSchema),
-    refetchInterval: 2000,
-  });
-
-  const { data: history } = useQuery({
-    queryKey: ["quota", "history", "diagnostics"],
-    queryFn: () => fetchJson("/api/quota/history?days=7", QuotaHistorySchema),
-  });
-
-  const { data: oauth } = useQuery({
-    queryKey: ["oauth", "status"],
-    queryFn: () => fetchJson("/api/oauth/status", OAuthStatusSchema),
-  });
-
-  const { data: flags } = useQuery({
-    queryKey: ["debug", "flags"],
-    queryFn: () => fetchJson("/api/engine/debug/flags", DebugFlagsSchema),
-    refetchInterval: 5000,
-  });
-
-  async function runAction(action: ActionButton) {
-    try {
-      const res = await fetch(action.url, { method: "POST" });
-      const json: unknown = await res.json().catch(() => ({}));
-      setLastResult(`${action.label}: ${JSON.stringify(json)}`);
-      if (res.ok) {
-        notify("success", action.label);
-      } else {
-        notify("error", `${action.label} failed`);
-      }
-      void queryClient.invalidateQueries();
-    } catch (error) {
-      notify("error", error instanceof Error ? error.message : "Action failed");
-    }
+  function runAction(action: ActionButton) {
+    adminMutation.mutate({ url: action.url, label: action.label });
   }
 
   function handleClick(action: ActionButton) {
     if (action.confirmTitle) {
       setPendingConfirm(action);
     } else {
-      void runAction(action);
+      runAction(action);
     }
   }
+
+  const lastResult = adminMutation.data
+    ? `${adminMutation.data.label}: ${JSON.stringify(adminMutation.data.result)}`
+    : null;
 
   return (
     <div className="space-y-6">
@@ -276,7 +243,7 @@ export function Diagnostics() {
           setPendingConfirm(null);
         }}
         onConfirm={() => {
-          if (pendingConfirm) void runAction(pendingConfirm);
+          if (pendingConfirm) runAction(pendingConfirm);
           setPendingConfirm(null);
         }}
       />

@@ -129,13 +129,18 @@ export function useSSEContext() {
 }
 
 /**
- * Subscribe to raw SSE events. The callback identity is captured at mount;
- * use a stable callback (useCallback) if you want updates to flow without
- * re-subscribing.
+ * Subscribe to raw SSE events. Holds the latest callback in a ref so callers
+ * don't need to memoize with useCallback — the subscription is attached once
+ * per provider, and dispatch always reads the latest cb. Standard React
+ * pattern for external-store subscribers.
  */
 export function useSSEEvents(cb: Subscriber) {
+  const cbRef = useRef(cb);
+  cbRef.current = cb;
   const { subscribe } = useContext(SSEContext);
   useEffect(() => {
-    return subscribe(cb);
-  }, [subscribe, cb]);
+    return subscribe((event) => {
+      cbRef.current(event);
+    });
+  }, [subscribe]);
 }

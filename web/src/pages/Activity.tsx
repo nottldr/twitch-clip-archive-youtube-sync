@@ -1,6 +1,5 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useMemo } from "react";
 
 import { ActivityRow, type FeedItem } from "#web/components/ActivityRow.js";
 import { LiveFeed } from "#web/components/LiveFeed.js";
@@ -14,12 +13,13 @@ import { PageHeader } from "#web/components/ui/PageHeader.js";
 import { Skeleton } from "#web/components/ui/Skeleton.js";
 import { Toolbar } from "#web/components/ui/Toolbar.js";
 import { useLiveBuffer } from "#web/hooks/use-live-buffer.js";
-import { fetchJson } from "#web/lib/api.js";
-import { type LogEntry, PaginatedLogsSchema } from "#web/lib/types.js";
+import { useLogsInfinite } from "#web/lib/queries.js";
+import type { LogEntry } from "#web/lib/types.js";
 
 const LOG_TYPES = ["state_change", "upload", "error"] as const;
+type LogType = (typeof LOG_TYPES)[number];
 
-const ERROR_CODE_OPTIONS = [
+const KNOWN_ERROR_CODES = [
   "QUOTA_EXCEEDED",
   "UPLOAD_LIMIT_EXCEEDED",
   "UNAUTHORIZED",
@@ -32,35 +32,20 @@ const ERROR_CODE_OPTIONS = [
   "FILE_TOO_SMALL",
 ] as const;
 
-async function fetchLogs(input: {
-  types: string[];
-  limit: number;
-  beforeId?: number;
-  clipId?: string;
-  since?: string;
-  errorCode?: string;
-}) {
-  const sp = new URLSearchParams();
-  if (input.types.length > 0 && input.types.length < LOG_TYPES.length) {
-    sp.set("type", input.types.join(","));
-  }
-  sp.set("limit", String(input.limit));
-  if (input.beforeId) sp.set("before", String(input.beforeId));
-  if (input.clipId) sp.set("clipId", input.clipId);
-  if (input.since) sp.set("since", input.since);
-  if (input.errorCode) sp.set("errorCode", input.errorCode);
-  return fetchJson(`/api/logs?${sp.toString()}`, PaginatedLogsSchema);
-}
+const KNOWN_ERROR_CODE_SET = new Set<string>(KNOWN_ERROR_CODES);
 
 /**
  * Pull the leading "CODE: " out of an engine_log `error` field. Engine writes
- * errors as `${code}: ${message}` (see uploads.ts:132). Returns null when the
- * shape doesn't match — we don't want to render a chip for free-form errors.
+ * errors as `${code}: ${message}` (see uploads.ts:132); we only render a chip
+ * when the leading token is one of our 10 canonical codes — anything else is
+ * left as plain message text so we don't accidentally turn a free-form string
+ * into a fake "chip".
  */
 function extractErrorCode(error: string | null): string | null {
   if (!error) return null;
-  const m = /^([A-Z][A-Z_]{2,})(?::\s|$)/.exec(error);
-  return m ? m[1] : null;
+  const colonIdx = error.indexOf(":");
+  const head = (colonIdx === -1 ? error : error.slice(0, colonIdx)).trim();
+  return KNOWN_ERROR_CODE_SET.has(head) ? head : null;
 }
 
 function logToFeedItem(entry: LogEntry): FeedItem {
@@ -76,33 +61,23 @@ function logToFeedItem(entry: LogEntry): FeedItem {
 }
 
 export function Activity() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const initialClipId = searchParams.get("clipId") ?? "";
-  const [clipFilter, setClipFilter] = useState(initialClipId);
-  const [selectedTypes, setSelectedTypes] = useState(new Set<string>(LOG_TYPES));
-  const [errorCode, setErrorCode] = useState("");
-  const [range, setRange] = useState<TimeRange>("all");
+  const search = useSearch({ from: "/activity" });
+  const navigate = useNavigate({ from: "/activity" });
   const liveBuffer = useLiveBuffer();
 
-  const typeArray = [...selectedTypes];
-  const since = timeRangeToSince(range);
+  const selectedTypes = useMemo<Set<string>>(
+    () => new Set(search.type ?? LOG_TYPES),
+    [search.type],
+  );
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteQuery({
-    queryKey: ["logs", typeArray.join(","), clipFilter, errorCode, range],
-    queryFn: ({ pageParam }) =>
-      fetchLogs({
-        types: typeArray,
-        limit: 50,
-        beforeId: pageParam,
-        clipId: clipFilter || undefined,
-        errorCode: errorCode || undefined,
-        since: since ?? undefined,
-      }),
-    initialPageParam: undefined as number | undefined,
-    getNextPageParam: (lastPage) => {
-      if (!lastPage.hasMore || lastPage.entries.length === 0) return;
-      return lastPage.entries.at(-1)?.id;
-    },
+  const since = timeRangeToSince(search.range);
+
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useLogsInfinite({
+    types: [...selectedTypes],
+    totalTypes: LOG_TYPES.length,
+    clipId: search.clipId || undefined,
+    errorCode: search.errorCode || undefined,
+    since,
   });
 
   const auditItems = useMemo<FeedItem[]>(
@@ -110,31 +85,44 @@ export function Activity() {
     [data],
   );
 
+  function isLogType(value: string): value is LogType {
+    switch (value) {
+      case "state_change":
+      case "upload":
+      case "error":
+        return true;
+      default:
+        return false;
+    }
+  }
+
   function toggleType(type: string) {
-    setSelectedTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
+    const next = new Set(selectedTypes);
+    if (next.has(type)) next.delete(type);
+    else next.add(type);
+    const arr = [...next].filter(isLogType);
+    void navigate({
+      search: (prev) => ({
+        ...prev,
+        type: arr.length === LOG_TYPES.length ? undefined : arr,
+      }),
     });
   }
 
   function clearClipFilter() {
-    setClipFilter("");
-    searchParams.delete("clipId");
-    setSearchParams(searchParams);
+    void navigate({ search: (prev) => ({ ...prev, clipId: "" }) });
   }
 
   // Apply the same filters to the live feed so the two regions don't disagree.
   const filteredLive = useMemo(() => {
     return liveBuffer.items.filter((item) => {
       if (!selectedTypes.has(item.type)) return false;
-      if (clipFilter && item.clipId !== clipFilter) return false;
-      if (errorCode && item.errorCode !== errorCode) return false;
+      if (search.clipId && item.clipId !== search.clipId) return false;
+      if (search.errorCode && item.errorCode !== search.errorCode) return false;
       // Live items are by definition recent — range filter does nothing here.
       return true;
     });
-  }, [liveBuffer.items, selectedTypes, clipFilter, errorCode]);
+  }, [liveBuffer.items, selectedTypes, search.clipId, search.errorCode]);
 
   return (
     <div className="space-y-4">
@@ -151,24 +139,30 @@ export function Activity() {
               selected={new Set(selectedTypes)}
               onToggle={toggleType}
             />
-            <TimeRangeFilter value={range} onChange={setRange} />
+            <TimeRangeFilter
+              value={search.range}
+              onChange={(range: TimeRange) => {
+                void navigate({ search: (prev) => ({ ...prev, range }) });
+              }}
+            />
             <select
-              value={errorCode}
+              value={search.errorCode}
               onChange={(e) => {
-                setErrorCode(e.target.value);
+                const value = e.target.value;
+                void navigate({ search: (prev) => ({ ...prev, errorCode: value }) });
               }}
               className="rounded border px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
             >
               <option value="">All error codes</option>
-              {ERROR_CODE_OPTIONS.map((c) => (
+              {KNOWN_ERROR_CODES.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
             </select>
-            {clipFilter && (
+            {search.clipId && (
               <span className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs text-blue-800 dark:border-blue-700 dark:bg-blue-900/40 dark:text-blue-100">
-                clip: <span className="font-mono">{clipFilter}</span>
+                clip: <span className="font-mono">{search.clipId}</span>
                 <button
                   type="button"
                   onClick={clearClipFilter}

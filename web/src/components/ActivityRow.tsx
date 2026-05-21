@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "@tanstack/react-router";
 
 import { StatusBadge } from "#web/components/StatusBadge.js";
 import { ErrorCodeChip } from "#web/components/ui/ErrorCodeChip.js";
@@ -51,7 +51,8 @@ export function ActivityRow({ item }: Props) {
           <>
             {" "}
             <Link
-              to={`/clips/${item.clipId}`}
+              to="/clips/$clipId"
+              params={{ clipId: item.clipId }}
               className="font-mono text-xs text-blue-600 hover:underline dark:text-blue-300"
             >
               {item.clipId}

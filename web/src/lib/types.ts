@@ -138,8 +138,8 @@ export const OAuthStatusSchema = z.object({
 });
 
 /**
- * Fault-injection flags read from /api/engine/debug/flags. When any flag is
- * true the nav renders a "Fault injection active" pill so we don't forget.
+ * Fault-injection flags read from /api/debug/flags. When any flag is true the
+ * nav renders a "Fault injection active" pill so we don't forget.
  */
 export const DebugFlagsSchema = z.object({
   fail: z.boolean(),
@@ -148,6 +148,19 @@ export const DebugFlagsSchema = z.object({
 });
 
 export type DebugFlags = z.infer<typeof DebugFlagsSchema>;
+
+/**
+ * Most action endpoints return either { ok: true } or a small numeric
+ * summary. These response schemas live here so mutation helpers in
+ * lib/mutations.ts can validate without re-defining the shape inline.
+ */
+export const OkResponseSchema = z.object({ ok: z.boolean() });
+
+export const BulkActionResponseSchema = z.object({ affected: z.number() });
+
+export const ResetCountResponseSchema = z.object({ reset: z.number() });
+
+export const AnyResponseSchema = z.unknown();
 
 export const ActivityItemSchema = z.object({
   clip_id: z.string(),

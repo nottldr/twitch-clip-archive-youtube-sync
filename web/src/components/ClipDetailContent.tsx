@@ -1,10 +1,9 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { z } from "zod/v4";
 
 import { ErrorCodeChip } from "#web/components/ui/ErrorCodeChip.js";
 import { fetchJson } from "#web/lib/api.js";
-import { useToast } from "#web/lib/toast.js";
+import { useForceUploadClip, useMarkIgnored, useRetryClip } from "#web/lib/mutations.js";
 import { type ClipDetail, type UploadAttemptRow, UploadAttemptRowSchema } from "#web/lib/types.js";
 
 import { StatusBadge } from "./StatusBadge.js";
@@ -78,7 +77,6 @@ function AttemptRow({ attempt }: { attempt: UploadAttemptRow }) {
 interface Props {
   clipId: string;
   data: ClipDetail;
-  onRefetch: () => void;
   /**
    * When true, the page can load more attempts via /api/clips/:id/attempts. The
    * drawer hides this affordance to keep its footprint small; the full-page
@@ -87,69 +85,14 @@ interface Props {
   enableLoadMoreAttempts?: boolean;
 }
 
-export function ClipDetailContent({ clipId, data, onRefetch, enableLoadMoreAttempts }: Props) {
-  const queryClient = useQueryClient();
-  const { notify } = useToast();
+export function ClipDetailContent({ clipId, data, enableLoadMoreAttempts }: Props) {
+  const retryMutation = useRetryClip();
+  const forceMutation = useForceUploadClip();
+  const ignoreMutation = useMarkIgnored();
 
   const [extraAttempts, setExtraAttempts] = useState<UploadAttemptRow[]>([]);
   const [hasMore, setHasMore] = useState(data.attemptsHasMore);
   const [loadingMore, setLoadingMore] = useState(false);
-
-  const retryMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/clips/${clipId}/retry`, { method: "POST" });
-      if (!res.ok) throw new Error(`Retry failed: ${res.status}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      notify("success", "Retry queued");
-      void queryClient.invalidateQueries({ queryKey: ["clips"] });
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-      onRefetch();
-    },
-    onError: (err) => {
-      notify("error", err instanceof Error ? err.message : "Retry failed");
-    },
-  });
-
-  // Force-upload — bypasses canUpload (quota / paused / awaitingAuth) and
-  // uploads this clip immediately via the machine's TRIGGER_CLIP event.
-  const forceMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/engine/trigger/${clipId}`, { method: "POST" });
-      if (!res.ok) throw new Error(`Force upload failed: ${res.status}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      notify("info", "Force upload triggered");
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-      onRefetch();
-    },
-    onError: (err) => {
-      notify("error", err instanceof Error ? err.message : "Force upload failed");
-    },
-  });
-
-  const ignoreMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/clips/bulk", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "ignore", clipIds: [clipId] }),
-      });
-      if (!res.ok) throw new Error(`Ignore failed: ${res.status}`);
-      return res.json();
-    },
-    onSuccess: () => {
-      notify("success", "Clip marked ignored");
-      void queryClient.invalidateQueries({ queryKey: ["clips"] });
-      void queryClient.invalidateQueries({ queryKey: ["stats"] });
-      onRefetch();
-    },
-    onError: (err) => {
-      notify("error", err instanceof Error ? err.message : "Mark-ignored failed");
-    },
-  });
 
   async function loadMoreAttempts() {
     const visibleAttempts = [...data.attempts, ...extraAttempts];
@@ -158,7 +101,7 @@ export function ClipDetailContent({ clipId, data, onRefetch, enableLoadMoreAttem
     setLoadingMore(true);
     try {
       const page = await fetchJson(
-        `/api/clips/${clipId}/attempts?limit=50&before=${lastId}`,
+        `/api/clips/${clipId}/attempts?limit=50&before=${String(lastId)}`,
         AttemptsPageSchema,
       );
       setExtraAttempts((prev) => [...prev, ...page.attempts]);
@@ -246,7 +189,7 @@ export function ClipDetailContent({ clipId, data, onRefetch, enableLoadMoreAttem
         )}
         <button
           onClick={() => {
-            retryMutation.mutate();
+            retryMutation.mutate(clipId);
           }}
           disabled={retryMutation.isPending}
           className="rounded border px-2 py-1 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-700"
@@ -255,7 +198,7 @@ export function ClipDetailContent({ clipId, data, onRefetch, enableLoadMoreAttem
         </button>
         <button
           onClick={() => {
-            forceMutation.mutate();
+            forceMutation.mutate(clipId);
           }}
           disabled={forceMutation.isPending}
           title="Upload this clip right now, ignoring quota / pause / auth state"
@@ -266,7 +209,7 @@ export function ClipDetailContent({ clipId, data, onRefetch, enableLoadMoreAttem
         {data.clip.sync_status !== "ignored" && (
           <button
             onClick={() => {
-              ignoreMutation.mutate();
+              ignoreMutation.mutate(clipId);
             }}
             disabled={ignoreMutation.isPending}
             className="rounded border px-2 py-1 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-700"
