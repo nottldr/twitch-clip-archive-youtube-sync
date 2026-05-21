@@ -470,6 +470,15 @@ export function createSyncEngine(
     actor.send({ type: eventMap[flag], value });
   }
 
+  function getDebugFlags() {
+    const ctx = actor.getSnapshot().context;
+    return {
+      fail: ctx.debugForceFailNextUpload,
+      quota: ctx.debugForceQuotaExhausted,
+      uploadLimit: ctx.debugForceUploadLimit,
+    };
+  }
+
   function clearDebugFlags() {
     actor.send({ type: "DEBUG_CLEAR_ALL" });
   }
@@ -500,6 +509,7 @@ export function createSyncEngine(
     retryClip,
     bulkClipAction,
     setDebugFlag,
+    getDebugFlags,
     clearDebugFlags,
     send,
   };

@@ -12,6 +12,7 @@ import { createTestDb } from "#server/db/connection.js";
 import { createClipsRepository } from "#server/db/repositories/clips.js";
 import { createEngineLogRepository } from "#server/db/repositories/engine-log.js";
 import { createEngineStateRepository } from "#server/db/repositories/engine-state.js";
+import { createOAuthRepository } from "#server/db/repositories/oauth.js";
 import { createQuotaRepository } from "#server/db/repositories/quota.js";
 import { createUploadsRepository } from "#server/db/repositories/uploads.js";
 import { createSyncEngine } from "#server/sync/engine.js";
@@ -97,13 +98,24 @@ beforeEach(() => {
   uploadsRepo = createUploadsRepository(db, logRepo);
   const quotaRepo = createQuotaRepository(db);
   const engineStateRepo = createEngineStateRepository(db);
+  const oauthRepo = createOAuthRepository(db);
   const scheduler = createScheduler(quotaRepo, 10_000, 100);
   const auth = mockAuthManager();
   const sseManager = createSSEManager();
   const config = makeConfig();
   const engine = createSyncEngine(config, clipsRepo, uploadsRepo, scheduler, auth, engineStateRepo);
 
-  app = createApp(config, clipsRepo, uploadsRepo, scheduler, engine, auth, sseManager, logRepo);
+  app = createApp(
+    config,
+    clipsRepo,
+    uploadsRepo,
+    scheduler,
+    engine,
+    auth,
+    sseManager,
+    logRepo,
+    oauthRepo,
+  );
 });
 
 afterEach(() => {

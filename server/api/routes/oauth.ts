@@ -1,13 +1,26 @@
 import { Hono } from "hono";
 
+import type { OAuthRepository } from "#server/db/repositories/oauth.js";
 import type { SyncEngine } from "#server/sync/engine.js";
 import type { AuthManager } from "#server/youtube/auth.js";
 
-export function createOAuthRoutes(authManager: AuthManager, engine: SyncEngine) {
+export function createOAuthRoutes(
+  authManager: AuthManager,
+  engine: SyncEngine,
+  oauthRepo: OAuthRepository,
+) {
   const app = new Hono();
 
   app.get("/oauth/status", (c) => {
-    return c.json({ connected: authManager.isAuthenticated() });
+    const connected = authManager.isAuthenticated();
+    if (!connected) return c.json({ connected: false });
+    const info = oauthRepo.getInfo();
+    return c.json({
+      connected: true,
+      expiryDate: info?.expiry_date ?? null,
+      scope: info?.scope ?? null,
+      lastRefresh: info?.updated_at ?? null,
+    });
   });
 
   app.get("/oauth/connect", (c) => {

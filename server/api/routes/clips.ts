@@ -16,7 +16,13 @@ const BulkActionRequestSchema = z.object({
 
 function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const s = String(value);
+  // Narrow to primitives so we never silently emit "[object Object]".
+  const s =
+    typeof value === "string"
+      ? value
+      : typeof value === "number" || typeof value === "boolean" || typeof value === "bigint"
+        ? String(value)
+        : JSON.stringify(value);
   if (s.includes(",") || s.includes('"') || s.includes("\n")) {
     return `"${s.replaceAll('"', '""')}"`;
   }

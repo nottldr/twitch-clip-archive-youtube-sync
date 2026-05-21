@@ -78,6 +78,8 @@ export const ClipRowSchema = z.object({
   youtube_id: z.string().nullable(),
   uploaded_at: z.string().nullable(),
   last_error: z.string().nullable(),
+  /** Error code of the most recent failed upload_attempts row, if any. */
+  last_error_code: z.string().nullable().optional(),
   retry_count: z.number(),
   view_count: z.number(),
   thumbnail_url: z.string().nullable(),
@@ -127,7 +129,25 @@ export const PaginatedClipsSchema = z.object({
 
 export const OAuthStatusSchema = z.object({
   connected: z.boolean(),
+  /** Token expiry from Google (ISO 8601 or millisecond-string per Google's libs). */
+  expiryDate: z.string().nullable().optional(),
+  /** Scopes granted on the refresh token. */
+  scope: z.string().nullable().optional(),
+  /** When we last wrote a refreshed token to the DB. */
+  lastRefresh: z.string().nullable().optional(),
 });
+
+/**
+ * Fault-injection flags read from /api/engine/debug/flags. When any flag is
+ * true the nav renders a "Fault injection active" pill so we don't forget.
+ */
+export const DebugFlagsSchema = z.object({
+  fail: z.boolean(),
+  quota: z.boolean(),
+  uploadLimit: z.boolean(),
+});
+
+export type DebugFlags = z.infer<typeof DebugFlagsSchema>;
 
 export const ActivityItemSchema = z.object({
   clip_id: z.string(),

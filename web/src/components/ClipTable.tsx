@@ -5,6 +5,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 
+import { ErrorCodeChip } from "#web/components/ui/ErrorCodeChip.js";
 import type { ClipRow, PaginatedClips } from "#web/lib/types.js";
 
 import { StatusBadge } from "./StatusBadge.js";
@@ -19,14 +20,23 @@ function formatDate(iso: string): string {
 
 const columnHelper = createColumnHelper<ClipRow>();
 
-function getColumns(opts: {
+interface ColumnOpts {
   onRetry: (clipId: string) => void;
   onView: (clipId: string) => void;
   sortBy: string;
   sortOrder: "asc" | "desc";
   onSort: (column: string) => void;
-}) {
-  return [
+  selection?: {
+    isSelected: (id: string) => boolean;
+    toggle: (id: string) => void;
+    selectAllOnPage: () => void;
+    pageAllSelected: boolean;
+    pageSomeSelected: boolean;
+  };
+}
+
+function getColumns(opts: ColumnOpts) {
+  const columns = [
     columnHelper.accessor("title", {
       header: "Title",
       cell: (info) => (
@@ -69,16 +79,22 @@ function getColumns(opts: {
       meta: { hideBelow: "lg" },
       cell: (info) => {
         const err = info.getValue();
-        if (!err) return <span className="text-gray-300">—</span>;
+        const code = info.row.original.last_error_code;
+        if (!err && !code) return <span className="text-gray-300">—</span>;
         return (
           <button
             onClick={() => {
               opts.onView(info.row.original.clip_id);
             }}
-            className="block max-w-[14rem] truncate text-left font-mono text-xs text-red-600 hover:underline dark:text-red-300"
-            title={err}
+            className="flex max-w-[16rem] items-center gap-1.5 text-left"
+            title={err ?? code ?? ""}
           >
-            {err}
+            {code && <ErrorCodeChip code={code} />}
+            {err && (
+              <span className="truncate font-mono text-xs text-red-600 dark:text-red-300">
+                {err}
+              </span>
+            )}
           </button>
         );
       },
@@ -138,6 +154,49 @@ function getColumns(opts: {
       },
     }),
   ];
+
+  if (opts.selection) {
+    const sel = opts.selection;
+    columns.unshift(
+      columnHelper.display({
+        id: "_select",
+        // Tri-state header checkbox: unchecked / indeterminate / checked.
+        header: () => (
+          <input
+            type="checkbox"
+            aria-label="Select all on page"
+            checked={sel.pageAllSelected}
+            ref={(node) => {
+              if (node) node.indeterminate = !sel.pageAllSelected && sel.pageSomeSelected;
+            }}
+            onChange={() => {
+              sel.selectAllOnPage();
+            }}
+            className="rounded"
+          />
+        ),
+        cell: (info) => {
+          const id = info.row.original.clip_id;
+          return (
+            <input
+              type="checkbox"
+              aria-label={`Select clip ${id}`}
+              checked={sel.isSelected(id)}
+              onChange={() => {
+                sel.toggle(id);
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+              className="rounded"
+            />
+          );
+        },
+      }),
+    );
+  }
+
+  return columns;
 }
 
 const HIDE_CLASSES: Record<string, string> = {
@@ -148,6 +207,23 @@ const HIDE_CLASSES: Record<string, string> = {
 
 const SORTABLE_COLUMNS = new Set(["title", "created_at", "sync_status", "retry_count"]);
 
+interface ClipTableProps {
+  data: PaginatedClips;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  onSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
+  onPageChange: (page: number) => void;
+  onRetry: (clipId: string) => void;
+  onView: (clipId: string) => void;
+  selection?: {
+    isSelected: (id: string) => boolean;
+    toggle: (id: string) => void;
+    selectAllOnPage: () => void;
+    pageAllSelected: boolean;
+    pageSomeSelected: boolean;
+  };
+}
+
 export function ClipTable({
   data,
   sortBy,
@@ -156,15 +232,8 @@ export function ClipTable({
   onPageChange,
   onRetry,
   onView,
-}: {
-  data: PaginatedClips;
-  sortBy: string;
-  sortOrder: "asc" | "desc";
-  onSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
-  onPageChange: (page: number) => void;
-  onRetry: (clipId: string) => void;
-  onView: (clipId: string) => void;
-}) {
+  selection,
+}: ClipTableProps) {
   const handleSort = (column: string) => {
     if (!SORTABLE_COLUMNS.has(column)) return;
     if (column === sortBy) {
@@ -174,7 +243,7 @@ export function ClipTable({
     }
   };
 
-  const columns = getColumns({ onRetry, onView, sortBy, sortOrder, onSort: handleSort });
+  const columns = getColumns({ onRetry, onView, sortBy, sortOrder, onSort: handleSort, selection });
 
   const table = useReactTable({
     data: data.clips,

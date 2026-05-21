@@ -115,6 +115,7 @@ const app = createApp(
   authManager,
   sseManager,
   logRepo,
+  oauthRepo,
 );
 
 // Start server, wait for it to be listening before starting the engine

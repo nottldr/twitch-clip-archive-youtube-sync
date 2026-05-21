@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import { AuthBanner } from "#web/components/AuthBanner.js";
 import { EngineStateIndicator } from "#web/components/EngineStateIndicator.js";
@@ -7,12 +7,13 @@ import { OAuthButton } from "#web/components/OAuthButton.js";
 import { fetchJson } from "#web/lib/api.js";
 import { SSEProvider, useSSEContext } from "#web/lib/sse-context.js";
 import { ToastProvider, useToast } from "#web/lib/toast.js";
-import { DashboardStatsSchema, OAuthStatusSchema } from "#web/lib/types.js";
+import { DashboardStatsSchema, DebugFlagsSchema, OAuthStatusSchema } from "#web/lib/types.js";
 
-import { Clips } from "./pages/Clips.js";
+import { Activity } from "./pages/Activity.js";
+import { ClipDetail } from "./pages/ClipDetail.js";
 import { Dashboard } from "./pages/Dashboard.js";
-import { Debug } from "./pages/Debug.js";
-import { Logs } from "./pages/Logs.js";
+import { Diagnostics } from "./pages/Diagnostics.js";
+import { Queue } from "./pages/Queue.js";
 
 function PauseResumeControls() {
   const queryClient = useQueryClient();
@@ -84,6 +85,34 @@ function PauseResumeControls() {
   );
 }
 
+/**
+ * Yellow nav-bar pill that surfaces a live fault-injection flag — even when the
+ * Diagnostics buttons are gated behind VITE_ENABLE_FAULT_INJECTION, a flag set
+ * via curl (or left on by a previous dev session) must be visible.
+ */
+function FaultInjectionPill() {
+  const { data: flags } = useQuery({
+    queryKey: ["debug", "flags"],
+    queryFn: () => fetchJson("/api/engine/debug/flags", DebugFlagsSchema),
+    refetchInterval: 5000,
+  });
+  if (!flags) return null;
+  const active = [
+    flags.fail && "force-fail",
+    flags.quota && "force-quota",
+    flags.uploadLimit && "force-upload-limit",
+  ].filter(Boolean);
+  if (active.length === 0) return null;
+  return (
+    <span
+      className="rounded bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800 dark:bg-yellow-900/60 dark:text-yellow-100"
+      title={`Active flags: ${active.join(", ")}`}
+    >
+      ⚠ Fault injection
+    </span>
+  );
+}
+
 function Layout() {
   const { data: stats } = useQuery({
     queryKey: ["stats"],
@@ -107,18 +136,19 @@ function Layout() {
           twitch-clip-archive-youtube-sync
         </span>
         <NavLink to="/" className={linkClass} end>
-          Dashboard
+          Overview
         </NavLink>
-        <NavLink to="/clips" className={linkClass}>
-          Clips
+        <NavLink to="/queue" className={linkClass}>
+          Queue
         </NavLink>
-        <NavLink to="/logs" className={linkClass}>
-          Logs
+        <NavLink to="/activity" className={linkClass}>
+          Activity
         </NavLink>
-        <NavLink to="/debug" className={linkClass}>
-          Debug
+        <NavLink to="/diagnostics" className={linkClass}>
+          Diagnostics
         </NavLink>
         <div className="ml-auto flex items-center gap-3">
+          <FaultInjectionPill />
           {stats && <EngineStateIndicator snapshot={stats.engine} />}
           <PauseResumeControls />
           {connected && (
@@ -139,9 +169,14 @@ function Layout() {
       <main className="mx-auto max-w-6xl p-4 sm:p-6">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/clips" element={<Clips />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/debug" element={<Debug />} />
+          <Route path="/queue" element={<Queue />} />
+          <Route path="/clips/:clipId" element={<ClipDetail />} />
+          <Route path="/activity" element={<Activity />} />
+          <Route path="/diagnostics" element={<Diagnostics />} />
+          {/* Preserve old bookmarks. */}
+          <Route path="/clips" element={<Navigate to="/queue" replace />} />
+          <Route path="/logs" element={<Navigate to="/activity" replace />} />
+          <Route path="/debug" element={<Navigate to="/diagnostics" replace />} />
         </Routes>
       </main>
     </div>

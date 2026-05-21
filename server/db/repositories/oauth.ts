@@ -14,6 +14,25 @@ export const OAuthTokensSchema = z.object({
 
 export type OAuthTokens = z.infer<typeof OAuthTokensSchema>;
 
+/**
+ * Public-safe token metadata for the diagnostics page. Excludes access_token
+ * and refresh_token; callers shouldn't be displaying those in the UI.
+ */
+export interface OAuthInfo {
+  expiry_date: string;
+  scope: string;
+  token_type: string;
+  /** When we last wrote a refresh — i.e. the freshness of the row. */
+  updated_at: string;
+}
+
+const OAuthInfoSchema = z.object({
+  expiry_date: z.string(),
+  scope: z.string(),
+  token_type: z.string(),
+  updated_at: z.string(),
+});
+
 export function createOAuthRepository(db: Database.Database) {
   function saveTokens(tokens: OAuthTokens): void {
     db.prepare(
@@ -52,9 +71,23 @@ export function createOAuthRepository(db: Database.Database) {
     db.prepare("DELETE FROM oauth_tokens WHERE id = 1").run();
   }
 
+  function getInfo(): OAuthInfo | null {
+    return (
+      parseRow(
+        OAuthInfoSchema,
+        db
+          .prepare(
+            "SELECT expiry_date, scope, token_type, updated_at FROM oauth_tokens WHERE id = 1",
+          )
+          .get(),
+      ) ?? null
+    );
+  }
+
   return {
     saveTokens,
     getTokens,
+    getInfo,
     clearTokens,
   };
 }

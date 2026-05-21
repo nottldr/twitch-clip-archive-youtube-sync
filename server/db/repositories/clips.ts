@@ -48,6 +48,18 @@ export const ClipRowSchema = z.object({
 
 export type ClipRow = z.infer<typeof ClipRowSchema>;
 
+/**
+ * Augmented row returned by getClipsPaginated. `last_error_code` is pulled
+ * from the most recent upload_attempts row for the clip (NULL if the clip has
+ * no recorded attempts, or no attempt with a code). Lets the UI render an
+ * error-code chip in the queue table without a second round-trip per row.
+ */
+export const ClipListRowSchema = ClipRowSchema.extend({
+  last_error_code: z.string().nullable(),
+});
+
+export type ClipListRow = z.infer<typeof ClipListRowSchema>;
+
 const CountSchema = z.object({ count: z.number() });
 const StatusCountSchema = z.object({ sync_status: z.string(), count: z.number() });
 
@@ -73,7 +85,7 @@ export interface ClipFilters {
 }
 
 export interface PaginatedClips {
-  clips: ClipRow[];
+  clips: ClipListRow[];
   total: number;
   page: number;
   pageSize: number;
@@ -322,10 +334,24 @@ export function createClipsRepository(db: Database.Database) {
     );
 
     const offset = (page - 1) * pageSize;
+    // Subquery pulls the most recent attempt's error_code per clip. Backed by
+    // the idx_upload_attempts_clip_started index so cost is O(log n) per row,
+    // not a per-row scan.
     const clips = parseRowsLenient(
-      ClipRowSchema,
+      ClipListRowSchema,
       db
-        .prepare(`SELECT * FROM clips ${where} ORDER BY ${sort} ${order} LIMIT ? OFFSET ?`)
+        .prepare(
+          `SELECT clips.*,
+                  (SELECT error_code
+                     FROM upload_attempts
+                    WHERE clip_id = clips.clip_id AND error_code IS NOT NULL
+                    ORDER BY id DESC
+                    LIMIT 1) AS last_error_code
+             FROM clips
+             ${where}
+             ORDER BY ${sort} ${order}
+             LIMIT ? OFFSET ?`,
+        )
         .all(...params, pageSize, offset),
       "clips.getClipsPaginated",
     );

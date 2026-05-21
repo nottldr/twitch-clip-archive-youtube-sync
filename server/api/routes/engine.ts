@@ -68,6 +68,13 @@ export function createEngineRoutes(engine: SyncEngine, authManager: AuthManager,
     return c.json(raw);
   });
 
+  // Read current fault-injection flags. The nav uses this to render the
+  // "Fault injection active" pill so an accidentally-left-on flag is hard
+  // to miss.
+  app.get("/debug/flags", (c) => {
+    return c.json(engine.getDebugFlags());
+  });
+
   app.post("/debug/set-flag/:flag", (c) => {
     const parsed = DebugFlagSchema.safeParse(c.req.param("flag"));
     if (!parsed.success) return c.json({ error: "Invalid flag" }, 400);

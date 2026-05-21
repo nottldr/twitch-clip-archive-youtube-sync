@@ -426,4 +426,26 @@ describe("getClipsPaginated", () => {
     expect(result.clips).toHaveLength(1);
     expect(result.clips[0].clip_id).toBe("a");
   });
+
+  it("surfaces the most recent attempt's error_code as last_error_code", () => {
+    repo.upsertFromArchive([makeClip({ clipId: "a" }), makeClip({ clipId: "b" })]);
+
+    // clip 'a' has two failed attempts; the most recent (highest id) wins.
+    db.prepare(
+      "INSERT INTO upload_attempts (clip_id, error_code, error_message, success, started_at, completed_at) VALUES (?, ?, ?, 0, datetime('now', '-2 minutes'), datetime('now', '-1 minute'))",
+    ).run("a", "QUOTA_EXCEEDED", "old");
+    db.prepare(
+      "INSERT INTO upload_attempts (clip_id, error_code, error_message, success, started_at, completed_at) VALUES (?, ?, ?, 0, datetime('now'), datetime('now'))",
+    ).run("a", "REJECTED", "new");
+
+    // clip 'b' has only an in-flight attempt with no error_code.
+    db.prepare(
+      "INSERT INTO upload_attempts (clip_id, error_code, success, started_at) VALUES (?, NULL, 0, datetime('now'))",
+    ).run("b");
+
+    const result = repo.getClipsPaginated({});
+    const byId = Object.fromEntries(result.clips.map((c) => [c.clip_id, c]));
+    expect(byId.a?.last_error_code).toBe("REJECTED");
+    expect(byId.b?.last_error_code).toBeNull();
+  });
 });

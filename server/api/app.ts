@@ -8,6 +8,7 @@ import { cors } from "hono/cors";
 import type { Config } from "#server/config.js";
 import type { ClipsRepository } from "#server/db/repositories/clips.js";
 import type { EngineLogRepository } from "#server/db/repositories/engine-log.js";
+import type { OAuthRepository } from "#server/db/repositories/oauth.js";
 import type { UploadsRepository } from "#server/db/repositories/uploads.js";
 import type { SyncEngine } from "#server/sync/engine.js";
 import type { Scheduler } from "#server/sync/scheduler.js";
@@ -29,6 +30,7 @@ export function createApp(
   authManager: AuthManager,
   sseManager: SSEManager,
   logRepo: EngineLogRepository,
+  oauthRepo: OAuthRepository,
 ) {
   const app = new Hono();
 
@@ -67,7 +69,7 @@ export function createApp(
   // API routes
   app.route("/api", createStatsRoutes(clipsRepo, scheduler, engine));
   app.route("/api", createClipsRoutes(clipsRepo, uploadsRepo, logRepo, engine));
-  app.route("/api", createOAuthRoutes(authManager, engine));
+  app.route("/api", createOAuthRoutes(authManager, engine, oauthRepo));
   app.route("/api", createEngineRoutes(engine, authManager, config));
   app.route("/api", createLogsRoutes(logRepo));
   app.route("/api", createEventsRoutes(sseManager));
