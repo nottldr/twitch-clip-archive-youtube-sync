@@ -10,10 +10,11 @@ local linters = new Mapping<String, Step> {
         glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
         check = "pnpm oxlint {{ files }}"
     }
-    ["tsgo"] {
-        glob = List("*.ts", "*.tsx")
+    ["tsgo-server"] {
         check = "pnpm tsgo --noEmit -p server/tsconfig.json"
-        batch = true
+    }
+    ["tsgo-web"] {
+        check = "pnpm tsgo --noEmit -p web/tsconfig.json"
     }
     ["test"] {
         check = "pnpm test"
