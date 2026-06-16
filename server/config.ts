@@ -73,7 +73,7 @@ export function loadConfig() {
     port: optionalInt("PORT", 3000),
     dailyQuotaLimit: optionalInt("DAILY_QUOTA_LIMIT", 10000),
     uploadCost: optionalInt("UPLOAD_COST", 100),
-    uploadIntervalMs: optionalInt("UPLOAD_INTERVAL_MS", 10000),
+    uploadIntervalMs: optionalInt("UPLOAD_INTERVAL_MS", 1000),
     archivePollIntervalMs: optionalInt("ARCHIVE_POLL_INTERVAL_MS", 900000),
     /**
      * How long the engine sits in `waiting.quotaExhausted` before probing
