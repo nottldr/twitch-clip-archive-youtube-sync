@@ -78,7 +78,7 @@ export async function uploadClip(
   }
 }
 
-function classifyError(err: unknown): UploadError {
+export function classifyError(err: unknown): UploadError {
   if (err instanceof UploadError) return err;
 
   const GoogleErrorSchema = z.object({
@@ -101,17 +101,26 @@ function classifyError(err: unknown): UploadError {
   const reason = error.errors?.[0]?.reason;
   const message = error.errors?.[0]?.message ?? error.message ?? rawMessage;
 
-  // Quota exceeded — match by reason, status, or message content
+  // Per-day upload-count cap. Google returns this as either:
+  //   - 403 "...exceeded the number of videos..." (older variant)
+  //   - 429 "Quota exceeded for quota metric 'Video Uploads' and limit 'Video Uploads per day'..."
+  // Both encode the same per-day cap and want a system pause until rollover —
+  // check before QUOTA_EXCEEDED / RATE_LIMITED so the 429 message doesn't
+  // get misrouted to the per-clip retry path.
+  if (
+    message.includes("exceeded the number of videos") ||
+    (message.includes("Video Uploads") && message.includes("per day"))
+  ) {
+    return new UploadError(message, "UPLOAD_LIMIT_EXCEEDED", false);
+  }
+
+  // Quota units (the API-units-per-day budget, distinct from the upload-count cap above)
   if (
     reason === "quotaExceeded" ||
     (status === 403 && message.toLowerCase().includes("quota")) ||
     message.toLowerCase().includes("exceeded your quota")
   ) {
     return new UploadError(message, "QUOTA_EXCEEDED", false);
-  }
-
-  if (message.includes("exceeded the number of videos")) {
-    return new UploadError(message, "UPLOAD_LIMIT_EXCEEDED", false);
   }
 
   if (status === 403) {
