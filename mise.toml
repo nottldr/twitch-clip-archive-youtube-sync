@@ -1,4 +1,14 @@
 [tools]
-node = "24"
+node = { version = "24", postinstall = "corepack enable" }
 hk = "latest"
 pkl = "latest"
+
+[env]
+HK_MISE = "1"
+
+[hooks]
+postinstall = 'hk install --mise'
+
+[settings]
+# This must be enabled to make the hooks work
+experimental = true

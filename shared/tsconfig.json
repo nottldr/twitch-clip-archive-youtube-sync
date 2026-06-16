@@ -3,7 +3,7 @@
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
+    "esModuleInterop": true,
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
@@ -12,13 +12,8 @@
     "declaration": true,
     "declarationMap": true,
     "emitDeclarationOnly": true,
-    "outDir": "../node_modules/.tsbuild/web",
-    "rootDir": "./",
-    "paths": {
-      "#web/*": ["./src/*"],
-      "#shared/*": ["../shared/*"]
-    }
+    "outDir": "../node_modules/.tsbuild/shared",
+    "rootDir": "./"
   },
-  "include": ["src"],
-  "references": [{ "path": "../shared" }]
+  "include": ["./**/*.ts"]
 }

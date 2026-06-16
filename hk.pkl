@@ -1,43 +1,106 @@
-amends "package://github.com/jdx/hk/releases/download/v1.35.0/hk@1.35.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Builtins.pkl"
 
-local linters = new Mapping<String, Step> {
+local jsTsGlobs =
+  List(
+    "**/*.js",
+    "**/*.jsx",
+    "**/*.mjs",
+    "**/*.cjs",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+  )
+
+// Cheap safety nets: large files, private keys, stray merge markers.
+local safety = new Mapping<String, Step> {
+  ["check-added-large-files"] = (Builtins.check_added_large_files) {
+    exclude = List("pnpm-lock.yaml")
+  }
+  ["detect-private-key"] = Builtins.detect_private_key
+  ["check-merge-conflict"] = Builtins.check_merge_conflict
+}
+
+// Config-file linters that don't run through pnpm.
+local configChecks = new Mapping<String, Step> {
+  ["pkl-format"] = Builtins.pkl_format
+  ["pkl"] = Builtins.pkl
+  ["mise"] = Builtins.mise
+}
+
+// Auto-fixing formatters — fast enough for every commit.
+local formatters = new Group {
+  prefix = "pnpm"
+  steps {
     ["oxfmt"] {
-        glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
-        check = "pnpm oxfmt --check {{ files }}"
-        fix = "pnpm oxfmt {{ files }}"
+      glob = jsTsGlobs
+      check = "oxfmt --check {{ files }}"
+      fix = "oxfmt {{ files }}"
     }
-    ["oxlint"] {
-        glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
-        check = "pnpm oxlint {{ files }}"
+  }
+}
+
+// Blocking checks — run on pre-push, not every commit.
+local linters = new Group {
+  prefix = "pnpm"
+  steps {
+    ["oxlint"] = (Builtins.ox_lint) {
+      glob = jsTsGlobs
+      check = "oxlint {{ files }}"
     }
-    ["tsgo-server"] {
-        check = "pnpm tsgo --noEmit -p server/tsconfig.json"
+    ["typecheck"] = (Builtins.tsc) {
+      check = "tsgo --build"
     }
-    ["tsgo-web"] {
-        check = "pnpm tsgo --noEmit -p web/tsconfig.json"
+  }
+}
+
+// `vitest related` scopes the run to tests impacted by staged files, so a
+// 10-file commit no longer triggers 10 full-suite runs.
+local tests = new Group {
+  prefix = "pnpm"
+  steps {
+    ["vitest"] {
+      glob = jsTsGlobs
+      check = "vitest related {{ files }} --run --silent --reporter=dot"
     }
-    ["test"] {
-        check = "pnpm test"
-        batch = true
-    }
+  }
 }
 
 hooks {
-    ["pre-commit"] {
-        fix = true
-        stash = "git"
-        steps = linters
+  ["pre-commit"] {
+    fix = true
+    stash = "git"
+    steps {
+      ...safety
+      ...configChecks
+      ["formatters"] = formatters
     }
-    ["fix"] {
-        fix = true
-        steps {
-            ["oxfmt"] {
-                glob = List("*.ts", "*.tsx", "*.js", "*.jsx")
-                fix = "pnpm oxfmt {{ files }}"
-            }
-        }
+  }
+  ["pre-push"] {
+    steps {
+      ...safety
+      ...configChecks
+      ["formatters"] = formatters
+      ["linters"] = linters
+      ["tests"] = tests
     }
-    ["check"] {
-        steps = linters
+  }
+  ["fix"] {
+    fix = true
+    steps {
+      ...configChecks
+      ["formatters"] = formatters
+      ["linters"] = linters
     }
+  }
+  ["check"] {
+    steps {
+      ...safety
+      ...configChecks
+      ["formatters"] = formatters
+      ["linters"] = linters
+      ["tests"] = tests
+    }
+  }
 }
