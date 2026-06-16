@@ -164,6 +164,60 @@ describe("single-flight refresh", () => {
   });
 });
 
+describe("refresh token revocation", () => {
+  function invalidGrantError() {
+    return Object.assign(new Error("invalid_grant"), {
+      response: { data: { error: "invalid_grant", error_description: "Token revoked" } },
+    });
+  }
+
+  it("clears stored tokens on invalid_grant and returns null from getAuthenticatedClient", async () => {
+    const repo = createOAuthRepository(db);
+    seedExpiringTokens(repo);
+
+    const client = makeMockClient();
+    client.refreshAccessToken = vi.fn(async () => {
+      throw invalidGrantError();
+    });
+
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+    const result = await auth.getAuthenticatedClient();
+
+    expect(result).toBeNull();
+    expect(repo.getTokens()).toBeNull();
+  });
+
+  it("preserves stored tokens on transient refresh errors", async () => {
+    const repo = createOAuthRepository(db);
+    seedExpiringTokens(repo);
+
+    const client = makeMockClient();
+    client.refreshAccessToken = vi.fn(async () => {
+      throw new Error("ECONNRESET");
+    });
+
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+    await expect(auth.getAuthenticatedClient()).rejects.toThrow("ECONNRESET");
+    // Tokens still present so the next attempt can retry the refresh
+    expect(repo.getTokens()).not.toBeNull();
+  });
+
+  it("isAuthenticated reports false after a revocation has cleared tokens", async () => {
+    const repo = createOAuthRepository(db);
+    seedExpiringTokens(repo);
+
+    const client = makeMockClient();
+    client.refreshAccessToken = vi.fn(async () => {
+      throw invalidGrantError();
+    });
+
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+    expect(auth.isAuthenticated()).toBe(true);
+    await auth.getAuthenticatedClient();
+    expect(auth.isAuthenticated()).toBe(false);
+  });
+});
+
 describe("OAuth state parameter", () => {
   it("issues a random state on getAuthUrl and accepts it in exchangeCode", async () => {
     const repo = createOAuthRepository(db);

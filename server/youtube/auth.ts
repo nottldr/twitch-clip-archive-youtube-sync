@@ -4,6 +4,22 @@ import { google } from "googleapis";
 
 import type { Config } from "#server/config.js";
 import type { OAuthRepository, OAuthTokens } from "#server/db/repositories/oauth.js";
+import { createLogger } from "#server/logger.js";
+
+const logger = createLogger("oauth-refresh");
+
+/**
+ * `invalid_grant` from Google's token endpoint means the refresh token is no
+ * longer usable (revoked, expired, account password reset, etc.). It's not
+ * recoverable without a fresh user consent, so we treat it as the trigger to
+ * clear stored tokens and surface as "not authenticated". Other refresh errors
+ * (network blips, 5xx) propagate as-is for the engine's normal retry path.
+ */
+function isRefreshTokenRevoked(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const err = error as { response?: { data?: { error?: string } } };
+  return err.response?.data?.error === "invalid_grant";
+}
 
 /** The real OAuth2 client type, derived via the googleapis surface so we don't
  *  need a direct dep on google-auth-library. */
@@ -66,6 +82,15 @@ export function createAuthManagerWithClient(
         };
         oauthRepo.saveTokens(next);
         return next;
+      } catch (error) {
+        if (isRefreshTokenRevoked(error)) {
+          logger.warn(
+            { err: error },
+            "Refresh token revoked by Google; clearing stored tokens. User must re-authenticate.",
+          );
+          oauthRepo.clearTokens();
+        }
+        throw error;
       } finally {
         inflightRefresh = null;
       }
@@ -87,15 +112,23 @@ export function createAuthManagerWithClient(
 
     const expiryMs = new Date(tokens.expiry_date).getTime();
     if (Date.now() >= expiryMs - REFRESH_WINDOW_MS) {
-      const refreshed = await refreshNow(tokens);
-      oauth2Client.setCredentials({
-        access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token,
-        expiry_date: new Date(refreshed.expiry_date).getTime(),
-        scope: refreshed.scope,
-        token_type: refreshed.token_type,
-      });
-      return refreshed;
+      try {
+        const refreshed = await refreshNow(tokens);
+        oauth2Client.setCredentials({
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+          expiry_date: new Date(refreshed.expiry_date).getTime(),
+          scope: refreshed.scope,
+          token_type: refreshed.token_type,
+        });
+        return refreshed;
+      } catch (error) {
+        // refreshNow cleared tokens on permanent revocation; surface as
+        // "not authenticated" so the engine routes to blocked.awaitingAuth.
+        // Transient errors (network, 5xx) leave tokens intact and re-throw.
+        if (!oauthRepo.getTokens()) return null;
+        throw error;
+      }
     }
     return tokens;
   }
