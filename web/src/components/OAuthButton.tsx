@@ -7,22 +7,16 @@ export function OAuthButton({
 }) {
   if (connected) {
     return (
-      <div className="flex items-center gap-3">
-        <span
-          className="inline-block h-2 w-2 rounded-full bg-green-500"
-          title="YouTube connected"
-        />
-        <button
-          onClick={() => {
-            void fetch("/api/oauth/disconnect", { method: "POST" }).then(() => {
-              onDisconnect();
-            });
-          }}
-          className="rounded border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
-        >
-          Disconnect
-        </button>
-      </div>
+      <button
+        onClick={() => {
+          void fetch("/api/oauth/disconnect", { method: "POST" }).then(() => {
+            onDisconnect();
+          });
+        }}
+        className="rounded border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
+      >
+        Disconnect
+      </button>
     );
   }
 

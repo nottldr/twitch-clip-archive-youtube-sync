@@ -6,7 +6,6 @@ import { OAuthButton } from "#web/components/OAuthButton.js";
 import { ErrorBoundary } from "#web/components/ui/ErrorBoundary.js";
 import { usePauseEngine, useResumeEngine } from "#web/lib/mutations.js";
 import { useDebugFlags, useOAuthStatus, useStats } from "#web/lib/queries.js";
-import { useSSEContext } from "#web/lib/sse-context.js";
 import { activityDefaults, queueDefaults } from "#web/router.js";
 
 const NAV_LINK_BASE = "px-3 py-1 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700";
@@ -29,12 +28,12 @@ function PauseResumeControls() {
         resumeMutation.mutate();
       }}
       disabled={resumeMutation.isPending}
-      className="rounded border border-green-300 px-2 py-1 text-xs text-green-700 hover:bg-green-50 disabled:opacity-50 dark:border-green-700 dark:text-green-300 dark:hover:bg-green-900/40"
+      className="rounded border border-green-300 px-3 py-1 text-sm text-green-700 hover:bg-green-50 disabled:opacity-50 dark:border-green-700 dark:text-green-300 dark:hover:bg-green-900/40"
     >
       {resumeMutation.isPending ? "Resuming…" : "Resume"}
     </button>
   ) : stats.engine.context.userPaused ? (
-    <button disabled className="rounded border border-orange-300 px-2 py-1 text-xs text-orange-500">
+    <button disabled className="rounded border border-orange-300 px-3 py-1 text-sm text-orange-500">
       Pausing…
     </button>
   ) : (
@@ -43,7 +42,7 @@ function PauseResumeControls() {
         pauseMutation.mutate();
       }}
       disabled={pauseMutation.isPending}
-      className="rounded border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-700"
+      className="rounded border px-3 py-1 text-sm hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-700"
     >
       {pauseMutation.isPending ? "Pausing…" : "Pause"}
     </button>
@@ -77,7 +76,6 @@ function FaultInjectionPill() {
 export function RootLayout() {
   const { data: stats } = useStats();
   const { data: oauthStatus, refetch: refetchOAuth } = useOAuthStatus();
-  const { connected } = useSSEContext();
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 dark:text-gray-100">
@@ -120,12 +118,6 @@ export function RootLayout() {
           <FaultInjectionPill />
           {stats && <EngineStateIndicator snapshot={stats.engine} />}
           <PauseResumeControls />
-          {connected && (
-            <span
-              className="inline-block h-2 w-2 rounded-full bg-green-500"
-              title="Live: receiving real-time updates"
-            />
-          )}
           <OAuthButton
             connected={oauthStatus?.connected ?? false}
             onDisconnect={() => {
