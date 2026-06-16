@@ -1,7 +1,10 @@
+import { Temporal } from "@js-temporal/polyfill";
+
+import { parseInstant } from "#web/lib/time.js";
 import type { EstimatedCompletion, QuotaUsage } from "#web/lib/types.js";
 
 function formatCountdown(resetsAt: string): string {
-  const ms = new Date(resetsAt).getTime() - Date.now();
+  const ms = parseInstant(resetsAt).since(Temporal.Now.instant()).total({ unit: "millisecond" });
   if (ms <= 0) return "resetting...";
   const hours = Math.floor(ms / 3_600_000);
   const minutes = Math.floor((ms % 3_600_000) / 60_000);

@@ -4,6 +4,11 @@ import { z } from "zod/v4";
 import { ErrorCodeChip } from "#web/components/ui/ErrorCodeChip.js";
 import { fetchJson } from "#web/lib/api.js";
 import { useForceUploadClip, useMarkIgnored, useRetryClip } from "#web/lib/mutations.js";
+import {
+  formatDateTime as fmtDateTime,
+  formatDuration as fmtDuration,
+  parseInstant,
+} from "#web/lib/time.js";
 import { type ClipDetail, type UploadAttemptRow, UploadAttemptRowSchema } from "#web/lib/types.js";
 
 import { StatusBadge } from "./StatusBadge.js";
@@ -15,15 +20,15 @@ const AttemptsPageSchema = z.object({
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString();
+  return fmtDateTime(iso);
 }
 
 function formatDuration(startedAt: string, completedAt: string | null): string {
   if (!completedAt) return "—";
-  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60_000).toFixed(1)}m`;
+  const ms = parseInstant(completedAt)
+    .since(parseInstant(startedAt))
+    .total({ unit: "millisecond" });
+  return fmtDuration(ms);
 }
 
 function AttemptRow({ attempt }: { attempt: UploadAttemptRow }) {

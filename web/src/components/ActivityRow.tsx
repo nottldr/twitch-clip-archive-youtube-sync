@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 
 import { StatusBadge } from "#web/components/StatusBadge.js";
 import { ErrorCodeChip } from "#web/components/ui/ErrorCodeChip.js";
+import { formatTime } from "#web/lib/time.js";
 
 /**
  * Unified shape rendered by both the live feed and the audit-log scrollback.
@@ -21,16 +22,6 @@ export interface FeedItem {
   isLive?: boolean;
 }
 
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-}
-
 interface Props {
   item: FeedItem;
 }
@@ -42,7 +33,7 @@ export function ActivityRow({ item }: Props) {
   return (
     <div className={`flex items-start gap-3 px-4 py-2 text-sm transition-colors ${flashCls}`}>
       <span className="shrink-0 font-mono text-xs text-gray-400 dark:text-gray-500">
-        {formatTimestamp(item.timestamp)}
+        {formatTime(item.timestamp)}
       </span>
       <StatusBadge status={item.type} />
       <span className="min-w-0 flex-1 text-gray-700 dark:text-gray-200">

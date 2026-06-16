@@ -1,3 +1,5 @@
+import { instantAgoIso } from "#web/lib/time.js";
+
 export type TimeRange = "all" | "1h" | "24h" | "7d";
 
 const RANGES: { value: TimeRange; label: string }[] = [
@@ -19,7 +21,7 @@ const RANGE_TO_MS: Record<Exclude<TimeRange, "all">, number> = {
  */
 export function timeRangeToSince(range: TimeRange): string | null {
   if (range === "all") return null;
-  return new Date(Date.now() - RANGE_TO_MS[range]).toISOString();
+  return instantAgoIso(RANGE_TO_MS[range]);
 }
 
 interface Props {

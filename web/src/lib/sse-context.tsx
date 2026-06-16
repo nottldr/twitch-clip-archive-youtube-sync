@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 
@@ -52,7 +53,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
     const env: SSEEnvelope = {
       type,
       payload,
-      receivedAt: new Date().toISOString(),
+      receivedAt: Temporal.Now.instant().toString(),
     };
     for (const cb of subscribersRef.current) cb(env);
   }, []);
@@ -75,6 +76,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ["clips"] });
       void queryClient.invalidateQueries({ queryKey: ["stats"] });
       void queryClient.invalidateQueries({ queryKey: ["activity"] });
+      void queryClient.invalidateQueries({ queryKey: ["quota"] });
       if (isClipPayload(payload) && payload.clipId) {
         void queryClient.invalidateQueries({ queryKey: ["clips", payload.clipId] });
       }

@@ -6,17 +6,10 @@ import {
 } from "@tanstack/react-table";
 
 import { ErrorCodeChip } from "#web/components/ui/ErrorCodeChip.js";
+import { formatDate } from "#web/lib/time.js";
 import type { ClipRow, PaginatedClips } from "#web/lib/types.js";
 
 import { StatusBadge } from "./StatusBadge.js";
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
 
 const columnHelper = createColumnHelper<ClipRow>();
 

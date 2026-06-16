@@ -37,8 +37,8 @@ const stateDisplayMap: Record<EngineStatePath, (ctx: EngineSnapshot["context"]) 
     label: "Selecting...",
     colour: "bg-blue-100 text-blue-800 animate-pulse",
   }),
-  "active.uploading": (ctx) => ({
-    label: ctx.clipTitle ? `Uploading: ${ctx.clipTitle}` : "Uploading...",
+  "active.uploading": () => ({
+    label: "Uploading...",
     colour: "bg-blue-100 text-blue-800",
   }),
   "active.reimporting": () => ({

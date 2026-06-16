@@ -8,7 +8,10 @@ export function OAuthButton({
   if (connected) {
     return (
       <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-green-600">YouTube Connected</span>
+        <span
+          className="inline-block h-2 w-2 rounded-full bg-green-500"
+          title="YouTube connected"
+        />
         <button
           onClick={() => {
             void fetch("/api/oauth/disconnect", { method: "POST" }).then(() => {

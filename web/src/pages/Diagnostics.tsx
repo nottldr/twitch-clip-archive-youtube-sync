@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { useState } from "react";
 
 import { EngineStateIndicator } from "#web/components/EngineStateIndicator.js";
@@ -12,7 +13,7 @@ import {
   useQuotaHistory,
   useStats,
 } from "#web/lib/queries.js";
-import { formatTimeAgo, formatTimeUntil, useTick } from "#web/lib/time.js";
+import { formatTimeAgo, formatTimeUntil, parseInstant, useTick } from "#web/lib/time.js";
 
 const FAULT_INJECTION_ENABLED = import.meta.env.VITE_ENABLE_FAULT_INJECTION === "true";
 
@@ -369,7 +370,7 @@ function OAuthPanel({
   // format is the raw refresh response.
   const expiry = oauth.expiryDate ? parseExpiry(oauth.expiryDate) : null;
   const expiryDisplay = expiry
-    ? `${expiry.toISOString()} (${formatTimeUntil(expiry.toISOString())})`
+    ? `${expiry.toString()} (${formatTimeUntil(expiry.toString())})`
     : (oauth.expiryDate ?? "—");
 
   return (
@@ -384,11 +385,13 @@ function OAuthPanel({
   );
 }
 
-function parseExpiry(raw: string): Date | null {
+function parseExpiry(raw: string): Temporal.Instant | null {
   // Try ISO first, then millisecond-epoch string.
-  const iso = new Date(raw);
-  if (!Number.isNaN(iso.getTime())) return iso;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return new Date(n);
-  return null;
+  try {
+    return parseInstant(raw);
+  } catch {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return Temporal.Instant.fromEpochMilliseconds(n);
+    return null;
+  }
 }
