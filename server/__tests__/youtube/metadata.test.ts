@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { TwitchClip } from "#server/archive/types.js";
-import { buildVideoMetadata, interpolateTemplate } from "#server/youtube/metadata.js";
+import {
+  buildVideoMetadata,
+  interpolateTemplate,
+  sanitizeForYouTube,
+} from "#server/youtube/metadata.js";
 
 function makeClip(overrides: Partial<TwitchClip> = {}): TwitchClip {
   return {
@@ -125,6 +129,64 @@ describe("buildVideoMetadata", () => {
     const meta = buildVideoMetadata(makeClip());
     expect(meta.snippet!.description).toContain("Twitch Clip Archive");
     expect(meta.snippet!.description).toContain("TestClip-abc123");
+  });
+});
+
+describe("sanitizeForYouTube", () => {
+  it.each([
+    ["<3", "❤️"],
+    ["</3", "💔"],
+    ["<.<", "‹.‹"],
+    [">.>", "›.›"],
+    ["<<<", "«««"],
+    [">>>", "»»»"],
+    ["<-", "←"],
+    ["->", "→"],
+    ["<=", "⇐"],
+    ["=>", "⇒"],
+    ["<>", "↔"],
+  ])("substitutes %s -> %s", (input, expected) => {
+    expect(sanitizeForYouTube(input)).toBe(expected);
+  });
+
+  it("strips bare angle brackets that didn't match a substitution", () => {
+    expect(sanitizeForYouTube("a<b>c")).toBe("abc");
+  });
+
+  it("matches </3 before <3", () => {
+    expect(sanitizeForYouTube("</3")).toBe("💔");
+  });
+
+  it("preserves surrounding text", () => {
+    expect(sanitizeForYouTube("stream <> stream")).toBe("stream ↔ stream");
+  });
+});
+
+describe("buildVideoMetadata sanitization", () => {
+  it("substitutes <3 in title", () => {
+    const meta = buildVideoMetadata(makeClip({ title: "love <3 it" }));
+    expect(meta.snippet!.title).toBe("love ❤️ it");
+  });
+
+  it("substitutes <> in title", () => {
+    const meta = buildVideoMetadata(makeClip({ title: "stream <> stream" }));
+    expect(meta.snippet!.title).toBe("stream ↔ stream");
+  });
+
+  it("strips bare angle brackets from title", () => {
+    const meta = buildVideoMetadata(makeClip({ title: "weird <x> title" }));
+    expect(meta.snippet!.title).toBe("weird x title");
+  });
+
+  it("sanitizes title folded into description via template", () => {
+    const meta = buildVideoMetadata(makeClip({ title: "<3 ya" }), "{{ title }}");
+    expect(meta.snippet!.description).toBe("❤️ ya");
+    expect(meta.snippet!.description).not.toMatch(/[<>]/);
+  });
+
+  it("sanitizes description content from a template", () => {
+    const meta = buildVideoMetadata(makeClip(), "before <3 after");
+    expect(meta.snippet!.description).toBe("before ❤️ after");
   });
 });
 

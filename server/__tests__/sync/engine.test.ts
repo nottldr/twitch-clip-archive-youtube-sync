@@ -88,7 +88,7 @@ function createClipFile(clipId: string, size: number = 5000) {
 function mockAuthManager(authenticated = true) {
   return {
     getAuthUrl: () => "https://example.com/auth",
-    exchangeCode: async () => {},
+    exchangeCode: async (_code: string, _state: string) => {},
     getAuthenticatedClient: async () => (authenticated ? ({} as any) : null),
     getOAuth2Client: async () => (authenticated ? ({} as any) : null),
     isAuthenticated: () => authenticated,

@@ -11,6 +11,31 @@ function formatDate(iso: string): string {
   });
 }
 
+// YouTube rejects `<` and `>` in snippet.title/description with a misleading
+// `invalidTitle` error. Substitute common patterns to preserve meaning, then
+// strip any remaining angle brackets.
+const SANITIZE_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/<\/3/g, "💔"],
+  [/<3/g, "❤️"],
+  [/<\.</g, "‹.‹"],
+  [/>\.>/g, "›.›"],
+  [/<<</g, "«««"],
+  [/>>>/g, "»»»"],
+  [/<-/g, "←"],
+  [/->/g, "→"],
+  [/<=/g, "⇐"],
+  [/=>/g, "⇒"],
+  [/<>/g, "↔"],
+];
+
+export function sanitizeForYouTube(input: string): string {
+  let output = input;
+  for (const [pattern, replacement] of SANITIZE_RULES) {
+    output = output.replaceAll(pattern, replacement);
+  }
+  return output.replaceAll(/[<>]/g, "");
+}
+
 const DEFAULT_DESCRIPTION_TEMPLATE = [
   "Twitch Clip Archive - {{ broadcaster_name }}",
   "",
@@ -58,9 +83,9 @@ export function buildVideoMetadata(
   clip: TwitchClip,
   descriptionTemplate?: string,
 ): youtube_v3.Schema$Video {
-  const title = clip.title.slice(0, 100);
+  const title = sanitizeForYouTube(clip.title).slice(0, 100);
   const template = descriptionTemplate ?? DEFAULT_DESCRIPTION_TEMPLATE;
-  const description = interpolateTemplate(template, clip).trim();
+  const description = sanitizeForYouTube(interpolateTemplate(template, clip).trim());
 
   return {
     snippet: {

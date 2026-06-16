@@ -47,11 +47,25 @@ function makeMockClient(opts: MockOptions = {}) {
   });
 
   return {
-    generateAuthUrl: () => "",
+    generateAuthUrl: vi.fn(
+      (urlOpts: { state?: string }) => `https://example.com/auth?state=${urlOpts.state ?? ""}`,
+    ),
     setCredentials: () => {},
-    getToken: async () => ({ tokens: {} }),
+    getToken: vi.fn(async () => ({
+      tokens: {
+        access_token: "exchanged-access",
+        refresh_token: "exchanged-refresh",
+        expiry_date: Date.now() + 60 * 60 * 1000,
+        scope: "scope",
+        token_type: "Bearer",
+      },
+    })),
     refreshAccessToken,
   };
+}
+
+function extractState(url: string): string {
+  return new URL(url).searchParams.get("state") ?? "";
 }
 
 function seedExpiringTokens(repo: ReturnType<typeof createOAuthRepository>) {
@@ -147,5 +161,53 @@ describe("single-flight refresh", () => {
     expect(result).not.toBeNull();
     expect(client.refreshAccessToken).toHaveBeenCalledTimes(2);
     expect(repo.getTokens()?.access_token).toBe("recovered");
+  });
+});
+
+describe("OAuth state parameter", () => {
+  it("issues a random state on getAuthUrl and accepts it in exchangeCode", async () => {
+    const repo = createOAuthRepository(db);
+    const client = makeMockClient();
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+
+    const state = extractState(auth.getAuthUrl());
+    expect(state).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(state.length).toBeGreaterThan(20);
+
+    await expect(auth.exchangeCode("code-1", state)).resolves.toBeUndefined();
+    expect(client.getToken).toHaveBeenCalledWith("code-1");
+  });
+
+  it("rejects an exchangeCode with a state that was never issued", async () => {
+    const repo = createOAuthRepository(db);
+    const client = makeMockClient();
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+
+    await expect(auth.exchangeCode("code-1", "forged-state")).rejects.toThrow(
+      /invalid or expired oauth state/i,
+    );
+    expect(client.getToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects reuse of a state that was already consumed", async () => {
+    const repo = createOAuthRepository(db);
+    const client = makeMockClient();
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+
+    const state = extractState(auth.getAuthUrl());
+    await auth.exchangeCode("code-1", state);
+    await expect(auth.exchangeCode("code-2", state)).rejects.toThrow(
+      /invalid or expired oauth state/i,
+    );
+  });
+
+  it("issues distinct state values for separate calls", () => {
+    const repo = createOAuthRepository(db);
+    const client = makeMockClient();
+    const auth = createAuthManagerWithClient(asClient(client), repo);
+
+    const a = extractState(auth.getAuthUrl());
+    const b = extractState(auth.getAuthUrl());
+    expect(a).not.toBe(b);
   });
 });

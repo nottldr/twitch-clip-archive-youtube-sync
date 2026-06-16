@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import { google } from "googleapis";
 
 import type { Config } from "#server/config.js";
@@ -14,6 +16,7 @@ const SCOPES = [
 ];
 
 const REFRESH_WINDOW_MS = 5 * 60 * 1000;
+const STATE_TTL_MS = 10 * 60 * 1000;
 
 export function createAuthManager(config: Config, oauthRepo: OAuthRepository): AuthManager {
   const oauth2Client = new google.auth.OAuth2(
@@ -37,6 +40,17 @@ export function createAuthManagerWithClient(
   // share its promise instead of each kicking off their own. Cleared in `finally`
   // so a failed refresh doesn't poison subsequent attempts.
   let inflightRefresh: Promise<OAuthTokens> | null = null;
+
+  // OAuth `state` parameter: issued in getAuthUrl, validated in exchangeCode.
+  // Single-use; entries expire after STATE_TTL_MS to bound memory if a user
+  // starts the flow but never returns.
+  const pendingStates = new Map<string, number>();
+  function purgeExpiredStates() {
+    const now = Date.now();
+    for (const [s, expiry] of pendingStates) {
+      if (expiry < now) pendingStates.delete(s);
+    }
+  }
 
   async function refreshNow(tokens: OAuthTokens): Promise<OAuthTokens> {
     if (inflightRefresh) return inflightRefresh;
@@ -87,14 +101,24 @@ export function createAuthManagerWithClient(
   }
 
   function getAuthUrl(): string {
+    purgeExpiredStates();
+    const state = randomBytes(32).toString("base64url");
+    pendingStates.set(state, Date.now() + STATE_TTL_MS);
     return oauth2Client.generateAuthUrl({
       access_type: "offline",
       prompt: "consent",
       scope: SCOPES,
+      state,
     });
   }
 
-  async function exchangeCode(code: string): Promise<void> {
+  async function exchangeCode(code: string, state: string): Promise<void> {
+    const expiry = pendingStates.get(state);
+    pendingStates.delete(state);
+    if (expiry === undefined || Date.now() > expiry) {
+      throw new Error("Invalid or expired OAuth state parameter");
+    }
+
     const { tokens } = await oauth2Client.getToken(code);
 
     if (!tokens.refresh_token) {
@@ -147,7 +171,7 @@ export function createAuthManagerWithClient(
 
 export interface AuthManager {
   getAuthUrl(): string;
-  exchangeCode(code: string): Promise<void>;
+  exchangeCode(code: string, state: string): Promise<void>;
   getAuthenticatedClient(): Promise<ReturnType<typeof google.youtube> | null>;
   getOAuth2Client(): Promise<OAuth2Client | null>;
   isAuthenticated(): boolean;
@@ -182,7 +206,7 @@ export function createDryRunAuthManager(baseUrl: string, oauthRepo: OAuthReposit
 
   return {
     getAuthUrl() {
-      return `${baseUrl}/api/oauth/callback?code=dry-run`;
+      return `${baseUrl}/api/oauth/callback?code=dry-run&state=dry-run`;
     },
     async exchangeCode() {
       oauthRepo.saveTokens({

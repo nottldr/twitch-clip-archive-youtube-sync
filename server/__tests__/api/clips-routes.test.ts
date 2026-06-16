@@ -28,7 +28,7 @@ let logRepo: ReturnType<typeof createEngineLogRepository>;
 function mockAuthManager() {
   return {
     getAuthUrl: () => "https://example.com/auth",
-    exchangeCode: async () => {},
+    exchangeCode: async (_code: string, _state: string) => {},
     // eslint-disable-next-line typescript/no-unsafe-type-assertion -- test stub
     getAuthenticatedClient: async () => ({}) as never,
     // eslint-disable-next-line typescript/no-unsafe-type-assertion -- test stub

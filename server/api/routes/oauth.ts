@@ -30,12 +30,16 @@ export function createOAuthRoutes(
 
   app.get("/oauth/callback", async (c) => {
     const code = c.req.query("code");
+    const state = c.req.query("state");
     if (!code) {
       return c.text("Missing authorization code", 400);
     }
+    if (!state) {
+      return c.text("Missing OAuth state parameter", 400);
+    }
 
     try {
-      await authManager.exchangeCode(code);
+      await authManager.exchangeCode(code, state);
       engine.notifyAuthComplete();
       return c.redirect("/#/connected");
     } catch (error) {
