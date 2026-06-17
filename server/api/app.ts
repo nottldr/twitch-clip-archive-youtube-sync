@@ -8,8 +8,10 @@ import { cors } from "hono/cors";
 import type { Config } from "#server/config.js";
 import type { ClipsRepository } from "#server/db/repositories/clips.js";
 import type { EngineLogRepository } from "#server/db/repositories/engine-log.js";
+import type { MirrorPublishesRepository } from "#server/db/repositories/mirror-publishes.js";
 import type { OAuthRepository } from "#server/db/repositories/oauth.js";
 import type { UploadsRepository } from "#server/db/repositories/uploads.js";
+import type { MirrorConfig } from "#server/mirror/publisher.js";
 import type { SyncEngine } from "#server/sync/engine.js";
 import type { Scheduler } from "#server/sync/scheduler.js";
 import type { AuthManager } from "#server/youtube/auth.js";
@@ -18,6 +20,7 @@ import { createClipsRoutes } from "./routes/clips.js";
 import { createEngineRoutes } from "./routes/engine.js";
 import { createEventsRoutes } from "./routes/events.js";
 import { createLogsRoutes } from "./routes/logs.js";
+import { createMirrorRoutes } from "./routes/mirror.js";
 import { createOAuthRoutes } from "./routes/oauth.js";
 import { createStatsRoutes } from "./routes/stats.js";
 
@@ -31,6 +34,8 @@ export function createApp(
   sseManager: SSEManager,
   logRepo: EngineLogRepository,
   oauthRepo: OAuthRepository,
+  mirrorRepo: MirrorPublishesRepository,
+  mirrorConfig: MirrorConfig,
 ) {
   const app = new Hono();
 
@@ -73,6 +78,7 @@ export function createApp(
   app.route("/api", createEngineRoutes(engine, authManager, config));
   app.route("/api", createLogsRoutes(logRepo));
   app.route("/api", createEventsRoutes(sseManager));
+  app.route("/api", createMirrorRoutes({ config: mirrorConfig, clipsRepo, mirrorRepo }));
 
   // Serve static frontend in production
   app.use("/*", serveStatic({ root: "./web/dist" }));

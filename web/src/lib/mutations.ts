@@ -5,6 +5,7 @@ import { useToast } from "#web/lib/toast.js";
 import {
   AnyResponseSchema,
   BulkActionResponseSchema,
+  MirrorPublishResponseSchema,
   OkResponseSchema,
   ResetCountResponseSchema,
 } from "#web/lib/types.js";
@@ -180,5 +181,24 @@ export function useResetFailed() {
 export function useResetAll() {
   return useMutation({
     mutationFn: () => apiPost("/api/engine/reset-all", undefined, ResetCountResponseSchema),
+  });
+}
+
+export function usePublishMirror() {
+  const queryClient = useQueryClient();
+  const { notify } = useToast();
+  return useMutation({
+    mutationFn: () => apiPost("/api/mirror/publish", undefined, MirrorPublishResponseSchema),
+    onSuccess: (result) => {
+      if (result.ok) {
+        notify("success", `Mirror published (${String(result.clipCount)} clips)`);
+      } else {
+        notify("error", result.error ?? "Mirror publish failed");
+      }
+      void queryClient.invalidateQueries({ queryKey: ["mirror"] });
+    },
+    onError: (err) => {
+      notify("error", err instanceof Error ? err.message : "Mirror publish failed");
+    },
   });
 }

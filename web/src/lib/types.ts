@@ -162,6 +162,37 @@ export const ResetCountResponseSchema = z.object({ reset: z.number() });
 
 export const AnyResponseSchema = z.unknown();
 
+export const MirrorStatusSchema = z.object({
+  configured: z.boolean(),
+  repo: z.string().nullable(),
+  branch: z.string().nullable(),
+  lastSuccess: z
+    .object({
+      at: z.string().nullable(),
+      clipCount: z.number().nullable(),
+      commitSha: z.string().nullable(),
+    })
+    .nullable(),
+  lastAttempt: z
+    .object({
+      at: z.string(),
+      ok: z.boolean(),
+      error: z.string().nullable(),
+    })
+    .nullable(),
+  nextDueAt: z.string().nullable(),
+});
+
+export type MirrorStatus = z.infer<typeof MirrorStatusSchema>;
+
+export const MirrorPublishResponseSchema = z.object({
+  ok: z.boolean(),
+  clipCount: z.number(),
+  commitSha: z.string().nullable(),
+  generatedAt: z.string(),
+  error: z.string().optional(),
+});
+
 export const ActivityItemSchema = z.object({
   clip_id: z.string(),
   title: z.string(),

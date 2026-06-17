@@ -12,6 +12,7 @@ import { createTestDb } from "#server/db/connection.js";
 import { createClipsRepository } from "#server/db/repositories/clips.js";
 import { createEngineLogRepository } from "#server/db/repositories/engine-log.js";
 import { createEngineStateRepository } from "#server/db/repositories/engine-state.js";
+import { createMirrorPublishesRepository } from "#server/db/repositories/mirror-publishes.js";
 import { createOAuthRepository } from "#server/db/repositories/oauth.js";
 import { createQuotaRepository } from "#server/db/repositories/quota.js";
 import { createUploadsRepository } from "#server/db/repositories/uploads.js";
@@ -60,6 +61,10 @@ function makeConfig(): Config {
     webhookUrl: null,
     ignoredClipIds: [],
     webhookEvents: [],
+    mirrorGithubToken: null,
+    mirrorRepoOwner: null,
+    mirrorRepoName: null,
+    mirrorBranch: "main",
   };
 }
 
@@ -105,6 +110,7 @@ beforeEach(() => {
   const config = makeConfig();
   const engine = createSyncEngine(config, clipsRepo, uploadsRepo, scheduler, auth, engineStateRepo);
 
+  const mirrorRepo = createMirrorPublishesRepository(db);
   app = createApp(
     config,
     clipsRepo,
@@ -115,6 +121,8 @@ beforeEach(() => {
     sseManager,
     logRepo,
     oauthRepo,
+    mirrorRepo,
+    null,
   );
 });
 
@@ -235,63 +243,6 @@ describe("POST /api/clips/bulk", () => {
       body: JSON.stringify({ action: "ignore", clipIds: [] }),
     });
     expect(status).toBe(400);
-  });
-});
-
-describe("GET /api/clips/export", () => {
-  it("returns CSV with all matching rows, not just the visible page", async () => {
-    for (let i = 0; i < 60; i++) seedClip(`clip-${i.toString().padStart(2, "0")}`);
-    clipsRepo.markFailed("clip-01", "boom");
-
-    const res = await app.fetch(new Request("http://test/api/clips/export"));
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/csv");
-    const csv = await res.text();
-    const lines = csv.trim().split("\n");
-    // header + 60 rows
-    expect(lines).toHaveLength(61);
-    expect(lines[0]).toContain("clip_id,title,broadcaster_name");
-  });
-
-  it("respects status filter", async () => {
-    seedClip("ok");
-    seedClip("bad");
-    clipsRepo.markFailed("bad", "boom");
-
-    const res = await app.fetch(new Request("http://test/api/clips/export?status=failed"));
-    const csv = await res.text();
-    const lines = csv.trim().split("\n");
-    expect(lines).toHaveLength(2); // header + 1
-    expect(lines[1]).toContain("bad");
-  });
-
-  it("escapes commas and quotes correctly", async () => {
-    clipsRepo.upsertFromArchive([
-      {
-        clipId: "fancy",
-        url: "u",
-        embedUrl: "e",
-        broadcasterId: 1,
-        broadcasterName: 'name with "quotes"',
-        creatorId: 2,
-        creatorName: "with, comma",
-        gameId: null,
-        language: "en",
-        title: "Tricky\nmultiline",
-        viewCount: 0,
-        createdAt: "2026-01-01T00:00:00Z",
-        thumbnailUrl: "t",
-        clipArchived: true,
-        thumbnailArchived: true,
-        deletedOnTwitch: false,
-      },
-    ]);
-
-    const res = await app.fetch(new Request("http://test/api/clips/export"));
-    const csv = await res.text();
-    expect(csv).toContain('"name with ""quotes"""');
-    expect(csv).toContain('"with, comma"');
-    expect(csv).toContain('"Tricky\nmultiline"');
   });
 });
 

@@ -162,6 +162,21 @@ const migrations: Migration[] = [
       CREATE INDEX idx_engine_log_clip_id ON engine_log(clip_id);
     `,
   },
+  {
+    version: 6,
+    sql: `
+      CREATE TABLE mirror_publishes (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          attempted_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          succeeded_at    TEXT,
+          clip_count      INTEGER,
+          commit_sha      TEXT,
+          error_message   TEXT
+      );
+
+      CREATE INDEX idx_mirror_publishes_attempted_at ON mirror_publishes(attempted_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

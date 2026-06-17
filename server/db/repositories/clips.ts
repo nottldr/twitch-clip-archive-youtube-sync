@@ -377,6 +377,20 @@ export function createClipsRepository(db: Database.Database) {
     );
   }
 
+  /**
+   * Full-table scan in `(created_at, clip_id)` order for the public-mirror
+   * snapshot. Streams ~26k rows — acceptable at current scale, single
+   * full-table scan, no pagination. Sort order is fixed so the mirror's
+   * `clips.json` produces stable bytes day to day.
+   */
+  function allForMirror(): ClipRow[] {
+    return parseRowsLenient(
+      ClipRowSchema,
+      db.prepare("SELECT * FROM clips ORDER BY created_at ASC, clip_id ASC").all(),
+      "clips.allForMirror",
+    );
+  }
+
   function getRecentActivity(limit: number = 10): ClipRow[] {
     return parseRowsLenient(
       ClipRowSchema,
@@ -483,6 +497,7 @@ export function createClipsRepository(db: Database.Database) {
     getClipsPaginated,
     getFailedForRetry,
     getRecentActivity,
+    allForMirror,
   };
 }
 

@@ -44,6 +44,10 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     webhookUrl: null,
     webhookEvents: [],
     ignoredClipIds: [],
+    mirrorGithubToken: null,
+    mirrorRepoOwner: null,
+    mirrorRepoName: null,
+    mirrorBranch: "main",
     ...overrides,
   } satisfies Config;
 }

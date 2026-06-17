@@ -14,27 +14,6 @@ const BulkActionRequestSchema = z.object({
   clipIds: z.array(z.string().min(1)).min(1).max(500),
 });
 
-function csvEscape(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  // Reject anything that isn't a clean primitive instead of silently
-  // emitting "[object Object]" or some JSON.stringify approximation. If a
-  // future column adds structured data, the caller should flatten it
-  // explicitly — failing loudly here makes that obvious.
-  if (
-    typeof value !== "string" &&
-    typeof value !== "number" &&
-    typeof value !== "boolean" &&
-    typeof value !== "bigint"
-  ) {
-    throw new TypeError(`csvEscape: refusing to stringify ${typeof value} value`);
-  }
-  const s = typeof value === "string" ? value : String(value);
-  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-    return `"${s.replaceAll('"', '""')}"`;
-  }
-  return s;
-}
-
 export function createClipsRoutes(
   clipsRepo: ClipsRepository,
   uploadsRepo: UploadsRepository,
@@ -64,70 +43,6 @@ export function createClipsRoutes(
     });
 
     return c.json(result);
-  });
-
-  /**
-   * Server-side CSV export. Honors the same status/search filters as GET /clips
-   * but returns every matching row, not just the current page. Mounted before
-   * /clips/:clipId to win the path match.
-   */
-  app.get("/clips/export", (c) => {
-    const status = c.req.query("status");
-    const search = c.req.query("search");
-    const statuses = status?.split(",").filter(Boolean);
-
-    // Fetch all matching rows. We use the paginated method with a very large
-    // pageSize for now — the dataset is bounded (thousands, not millions).
-    const { clips } = clipsRepo.getClipsPaginated({
-      statuses,
-      search,
-      sortBy: "created_at",
-      sortOrder: "asc",
-      page: 1,
-      pageSize: 100_000,
-    });
-
-    const header = [
-      "clip_id",
-      "title",
-      "broadcaster_name",
-      "creator_name",
-      "sync_status",
-      "youtube_id",
-      "uploaded_at",
-      "last_error",
-      "retry_count",
-      "view_count",
-      "created_at",
-      "url",
-    ];
-    const rows = clips.map((clip) =>
-      [
-        clip.clip_id,
-        clip.title,
-        clip.broadcaster_name,
-        clip.creator_name,
-        clip.sync_status,
-        clip.youtube_id,
-        clip.uploaded_at,
-        clip.last_error,
-        clip.retry_count,
-        clip.view_count,
-        clip.created_at,
-        clip.url,
-      ]
-        .map(csvEscape)
-        .join(","),
-    );
-    const body = [header.join(","), ...rows].join("\n") + "\n";
-
-    return new Response(body, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="clips-${new Date().toISOString().slice(0, 10)}.csv"`,
-      },
-    });
   });
 
   /**

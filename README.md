@@ -1,6 +1,6 @@
 # twitch-clip-archive-youtube-sync
 
-Uploads clips from a [twitch-clip-archive](https://github.com/seriousm4x/twitch-clip-archive) instance to YouTube as unlisted videos. Includes a web admin UI for monitoring progress, managing OAuth, and exporting YouTube links.
+Uploads clips from a [twitch-clip-archive](https://github.com/seriousm4x/twitch-clip-archive) instance to YouTube as unlisted videos. Includes a web admin UI for monitoring progress and managing OAuth, plus a daily public-mirror snapshot of the catalog to a private GitHub repo for downstream indexers.
 
 This tool reads the JSON database dumps and media files that twitch-clip-archive produces, uploads them to YouTube via the Data API v3, and tracks what's been synced in a local SQLite database. It respects YouTube's daily quota limits and picks up where it left off after restarts.
 
@@ -107,6 +107,9 @@ See [.env.example](./.env.example) for all available variables. Key ones:
 | `GOOGLE_PROJECT_NUMBER`                    | _unset_              | Numeric Google Cloud project ID; if set, the engine queries Service Usage to discover the real daily quota at startup.                                                                                                                                    |
 | `IGNORED_CLIP_IDS`                         | _unset_              | Comma-separated clip IDs to mark `ignored` (skipped permanently).                                                                                                                                                                                         |
 | `WEBHOOK_URL`, `WEBHOOK_EVENTS`            | _unset_              | Outbound webhook delivery for selected events.                                                                                                                                                                                                            |
+| `MIRROR_GITHUB_TOKEN`                      | _unset_              | Fine-grained GitHub PAT with read+write `contents` on the mirror repo. When set (together with `MIRROR_REPO_OWNER` and `MIRROR_REPO_NAME`) the engine pushes a daily public-safe snapshot of the clip catalog. Unset = mirror disabled.                   |
+| `MIRROR_REPO_OWNER`, `MIRROR_REPO_NAME`    | _unset_              | Owner + repo name for the private mirror repo (must already exist on GitHub).                                                                                                                                                                             |
+| `MIRROR_BRANCH`                            | `main`               | Branch to publish to.                                                                                                                                                                                                                                     |
 
 ### Archive dump consumption
 
@@ -220,12 +223,38 @@ quota-exhaustion events since a given date.
 Filter params: `clipId`, `errorCode`, `since`, `until`, `types`,
 `limit`, `before` (cursor).
 
-#### Export clips to CSV
+#### Share the catalog with someone else (public mirror)
 
-UI: Clips page → "Export CSV" (honors current status + search filters,
-exports every matching row, not just the visible page).
+The Diagnostics page has a **"Public mirror"** panel that publishes a
+daily snapshot of the clip catalog to a private GitHub repo. Consumers
+(an indexer site, a friend's importer) fetch a single `clips.json` plus
+a small `manifest.json` over HTTPS with a fine-grained PAT.
 
-API: `GET /api/clips/export?status=failed,uploaded&search=stream`.
+**Setup (once):**
+
+1. Create a private GitHub repo to hold the mirror (e.g. `joshua/twitch-mirror`).
+2. Create two fine-grained PATs scoped to that repo only:
+   - **Server token** (write): `Contents` → Read and write. Stored as `MIRROR_GITHUB_TOKEN` on the sync host.
+   - **Consumer token** (read): `Contents` → Read only. Given to whoever consumes the data.
+3. Set `MIRROR_GITHUB_TOKEN`, `MIRROR_REPO_OWNER`, `MIRROR_REPO_NAME` (and optionally `MIRROR_BRANCH`) in the server env.
+
+The scheduler ticks every 24h. Press **Force publish now** on the
+Diagnostics page when you need an out-of-band update. Failures are
+recorded in the `mirror_publishes` table and surfaced in the panel.
+
+**Consumer side:**
+
+```bash
+curl -H "Authorization: Bearer <CONSUMER_TOKEN>" \
+  https://raw.githubusercontent.com/<OWNER>/<REPO>/main/clips.json > clips.json
+```
+
+`clips.json` is a pretty-printed JSON array sorted by `(created_at,
+clip_id)` with `safe-stable-stringify`-canonicalized keys — same logical
+data → identical bytes day to day, so daily `git diff` is small and
+meaningful. `manifest.json` carries `{ generated_at, clip_count,
+by_status, schema_version }` for "have I already got this version?"
+checks.
 
 #### Force-upload a single clip immediately
 
@@ -316,8 +345,7 @@ or commit messages. Append as phases land.
   full attempt history, last error, retry count, and "retry from scratch"
   / "mark ignored" buttons in one place. New API endpoints:
   `GET /api/clips/:clipId` (detail), `GET /api/clips/:clipId/attempts`,
-  `POST /api/clips/:clipId/retry`, `POST /api/clips/bulk`,
-  `GET /api/clips/export` (server-side, honors filters). `/api/logs` now
+  `POST /api/clips/:clipId/retry`, `POST /api/clips/bulk`. `/api/logs` now
   accepts `clipId`/`errorCode`/`since`/`until` filters. New SSE events:
   `clip:uploaded`, `clip:failed`, `clip:skipped`, `auth:lost`,
   `auth:gained`. Targeted SSE-driven query invalidation replaces the
@@ -336,3 +364,13 @@ or commit messages. Append as phases land.
   populated on entry to every wait state so the UI countdown works
   everywhere. `UPLOAD_CONCURRENCY` env var reserved (no behavior change
   yet; logs a warning if set >1).
+- **Mirror (after Phase 3):** Daily snapshot of the clip catalog to a
+  private GitHub repo via the Contents API. Pretty-printed JSON sorted
+  by `(created_at, clip_id)` with `safe-stable-stringify`-canonicalized
+  keys — same logical data → identical bytes. Diagnostics page exposes
+  the current status and a "Force publish now" button. New migration
+  v6 adds the `mirror_publishes` audit table. New env vars
+  `MIRROR_GITHUB_TOKEN`, `MIRROR_REPO_OWNER`, `MIRROR_REPO_NAME`,
+  `MIRROR_BRANCH`. Replaces the old `GET /api/clips/export` CSV route
+  and queue-page Copy Links / Export CSV buttons — JSON is the
+  canonical export surface now.

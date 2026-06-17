@@ -112,6 +112,16 @@ export function loadConfig() {
     webhookEvents: optional("WEBHOOK_EVENTS", "upload:success,quota:exhausted")
       .split(",")
       .map((s) => s.trim()),
+    /**
+     * Public mirror: daily snapshot of the clip catalog pushed to a private
+     * GitHub repo via the Contents API. All four vars are required to enable
+     * — if MIRROR_GITHUB_TOKEN is unset, the scheduler no-ops and the
+     * Diagnostics button returns 503 with a "not configured" message.
+     */
+    mirrorGithubToken: process.env["MIRROR_GITHUB_TOKEN"] ?? null,
+    mirrorRepoOwner: process.env["MIRROR_REPO_OWNER"] ?? null,
+    mirrorRepoName: process.env["MIRROR_REPO_NAME"] ?? null,
+    mirrorBranch: optional("MIRROR_BRANCH", "main"),
   } as const;
 }
 

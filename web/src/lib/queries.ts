@@ -6,6 +6,7 @@ import {
   DashboardStatsSchema,
   DebugFlagsSchema,
   EngineSnapshotSchema,
+  MirrorStatusSchema,
   OAuthStatusSchema,
   PaginatedClipsSchema,
   PaginatedLogsSchema,
@@ -36,6 +37,7 @@ export const queryKeys = {
     sortOrder: string;
   }) => ["clips", params.page, params.statusParam, params.search, params.sortBy, params.sortOrder],
   clipDetail: (clipId: string | null | undefined) => ["clips", clipId] as const,
+  mirrorStatus: ["mirror", "status"] as const,
   logs: (params: { types: string; clipId: string; errorCode: string; range: string }) => [
     "logs",
     params.types,
@@ -103,6 +105,13 @@ interface ClipsListParams {
   search: string;
   sortBy: string;
   sortOrder: string;
+}
+
+export function useMirrorStatus() {
+  return useQuery({
+    queryKey: queryKeys.mirrorStatus,
+    queryFn: () => fetchJson("/api/mirror/status", MirrorStatusSchema),
+  });
 }
 
 export function useClipsList(params: ClipsListParams) {

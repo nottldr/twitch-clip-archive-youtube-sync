@@ -37,6 +37,7 @@
     "hono": "^4.12.9",
     "immer": "^11.1.4",
     "pino": "^10.3.1",
+    "safe-stable-stringify": "^2.5.0",
     "xstate": "^5.30.0",
     "zod": "^4.3.6"
   },

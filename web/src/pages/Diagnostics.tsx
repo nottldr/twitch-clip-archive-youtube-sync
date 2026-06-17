@@ -5,15 +5,17 @@ import { EngineStateIndicator } from "#web/components/EngineStateIndicator.js";
 import { ConfirmDialog } from "#web/components/ui/ConfirmDialog.js";
 import { PageHeader } from "#web/components/ui/PageHeader.js";
 import { Skeleton } from "#web/components/ui/Skeleton.js";
-import { useAdminAction } from "#web/lib/mutations.js";
+import { useAdminAction, usePublishMirror } from "#web/lib/mutations.js";
 import {
   useDebugFlags,
   useEngineSnapshot,
+  useMirrorStatus,
   useOAuthStatus,
   useQuotaHistory,
   useStats,
 } from "#web/lib/queries.js";
 import { formatTimeAgo, formatTimeUntil, parseInstant, useTick } from "#web/lib/time.js";
+import type { MirrorStatus } from "#web/lib/types.js";
 
 const FAULT_INJECTION_ENABLED = import.meta.env.VITE_ENABLE_FAULT_INJECTION === "true";
 
@@ -185,6 +187,10 @@ export function Diagnostics() {
 
       <Panel title="OAuth" defaultOpen>
         <OAuthPanel oauth={oauth} />
+      </Panel>
+
+      <Panel title="Public mirror">
+        <MirrorPanel />
       </Panel>
 
       <Panel title="Clip counts">
@@ -383,6 +389,75 @@ function OAuthPanel({
       ]}
     />
   );
+}
+
+function MirrorPanel() {
+  const { data: status } = useMirrorStatus();
+  const publish = usePublishMirror();
+  useTick(15_000);
+
+  if (!status) return <Skeleton className="h-24 w-full" />;
+
+  if (!status.configured) {
+    return (
+      <div className="text-sm text-gray-600 dark:text-gray-300">
+        <p>
+          Not configured. Set{" "}
+          <code className="rounded bg-gray-100 px-1 dark:bg-gray-700">MIRROR_GITHUB_TOKEN</code>,{" "}
+          <code className="rounded bg-gray-100 px-1 dark:bg-gray-700">MIRROR_REPO_OWNER</code>, and{" "}
+          <code className="rounded bg-gray-100 px-1 dark:bg-gray-700">MIRROR_REPO_NAME</code> to
+          enable daily snapshots of the clip catalog to a private GitHub repo.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <KvGrid entries={mirrorPanelEntries(status)} />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={publish.isPending}
+          onClick={() => {
+            publish.mutate();
+          }}
+          className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-700"
+        >
+          {publish.isPending ? "Publishing…" : "Force publish now"}
+        </button>
+        {publish.data && !publish.data.ok && (
+          <span className="text-xs text-red-600 dark:text-red-400">
+            Last attempt failed: {publish.data.error}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function mirrorPanelEntries(status: MirrorStatus): [string, string][] {
+  const entries: [string, string][] = [
+    ["Configured", "yes"],
+    ["Repo", status.repo ?? "—"],
+    ["Branch", status.branch ?? "—"],
+  ];
+  if (status.lastSuccess) {
+    entries.push(
+      ["Last success", status.lastSuccess.at ? formatTimeAgo(status.lastSuccess.at) : "—"],
+      ["Last clip count", status.lastSuccess.clipCount?.toLocaleString() ?? "—"],
+      ["Last commit", status.lastSuccess.commitSha?.slice(0, 7) ?? "—"],
+    );
+  } else {
+    entries.push(["Last success", "never"]);
+  }
+  if (status.nextDueAt) {
+    entries.push(["Next due", formatTimeUntil(status.nextDueAt)]);
+  }
+  if (status.lastAttempt && !status.lastAttempt.ok) {
+    entries.push(["Last attempt error", status.lastAttempt.error ?? "—"]);
+  }
+  return entries;
 }
 
 function parseExpiry(raw: string): Temporal.Instant | null {

@@ -3,16 +3,19 @@ import { createServer } from "node:http";
 import { getRequestListener } from "@hono/node-server";
 
 import { createApp } from "#server/api/app.js";
+import { mirrorConfigFromEnv } from "#server/api/routes/mirror.js";
 import { createSSEManager } from "#server/api/sse.js";
 import { loadConfig } from "#server/config.js";
 import { closeDb, getDb } from "#server/db/connection.js";
 import { createClipsRepository } from "#server/db/repositories/clips.js";
 import { createEngineLogRepository } from "#server/db/repositories/engine-log.js";
 import { createEngineStateRepository } from "#server/db/repositories/engine-state.js";
+import { createMirrorPublishesRepository } from "#server/db/repositories/mirror-publishes.js";
 import { createOAuthRepository } from "#server/db/repositories/oauth.js";
 import { createQuotaRepository } from "#server/db/repositories/quota.js";
 import { createUploadsRepository } from "#server/db/repositories/uploads.js";
 import { createLogger } from "#server/logger.js";
+import { startMirrorScheduler } from "#server/mirror/publisher.js";
 import { type EngineEventHandler, createSyncEngine } from "#server/sync/engine.js";
 import { createScheduler } from "#server/sync/scheduler.js";
 import { createAuthManager, createDryRunAuthManager } from "#server/youtube/auth.js";
@@ -37,6 +40,8 @@ const uploadsRepo = createUploadsRepository(db, logRepo);
 const quotaRepo = createQuotaRepository(db);
 const oauthRepo = createOAuthRepository(db);
 const engineStateRepo = createEngineStateRepository(db);
+const mirrorRepo = createMirrorPublishesRepository(db);
+const mirrorConfig = mirrorConfigFromEnv(config);
 
 // YouTube auth
 const authManager = config.dryRun
@@ -116,6 +121,8 @@ const app = createApp(
   sseManager,
   logRepo,
   oauthRepo,
+  mirrorRepo,
+  mirrorConfig,
 );
 
 // Start server, wait for it to be listening before starting the engine
@@ -140,11 +147,19 @@ await new Promise<void>((resolve, reject) => {
 logger.info({ archivePath: config.archivePath, dataPath: config.dataPath }, "Starting sync engine");
 engine.start();
 
+// Mirror scheduler — no-ops if MIRROR_GITHUB_TOKEN is unset.
+const mirrorScheduler = startMirrorScheduler({
+  config: mirrorConfig,
+  clipsRepo,
+  mirrorRepo,
+});
+
 // Graceful shutdown — close all connections, wait for port release, then exit.
 function shutdown() {
   server.closeAllConnections();
   server.close(() => {
     engine.stop();
+    mirrorScheduler.stop();
     closeDb();
     process.exit(0);
   });

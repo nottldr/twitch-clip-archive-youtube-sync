@@ -12,7 +12,6 @@ import { useRowKeyboardNav } from "#web/hooks/use-row-keyboard-nav.js";
 import { useRowSelection } from "#web/hooks/use-row-selection.js";
 import { useBulkClipAction, useRetryClip } from "#web/lib/mutations.js";
 import { useClipsList, useStats } from "#web/lib/queries.js";
-import { useToast } from "#web/lib/toast.js";
 
 const ALL_STATUSES = ["pending", "uploading", "uploaded", "failed", "skipped", "ignored"] as const;
 
@@ -23,7 +22,6 @@ export function Queue() {
   const [searchInput, setSearchInput] = useState(search.search);
   const [drawerClipId, setDrawerClipId] = useState<string | null>(null);
 
-  const { notify } = useToast();
   const selection = useRowSelection();
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -115,29 +113,6 @@ export function Queue() {
     });
   }
 
-  function handleCopyLinks() {
-    if (!data) return;
-    const links = data.clips
-      .filter((c) => c.youtube_id)
-      .map((c) => `https://youtu.be/${c.youtube_id ?? ""}`)
-      .join("\n");
-    void navigator.clipboard.writeText(links);
-    notify("info", "YouTube links copied to clipboard");
-  }
-
-  function handleExportCsv() {
-    const exportParams = new URLSearchParams();
-    if (statusParam && selectedStatuses.size < ALL_STATUSES.length) {
-      exportParams.set("status", statusParam);
-    }
-    if (search.search) exportParams.set("search", search.search);
-    const url = `/api/clips/export?${exportParams.toString()}`;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "";
-    a.click();
-  }
-
   const filterOptions = useMemo(
     () =>
       ALL_STATUSES.map((s) => ({
@@ -175,27 +150,7 @@ export function Queue() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Queue"
-        subtitle="Filter, search, and act on clips in bulk."
-        actions={
-          <>
-            <button
-              onClick={handleCopyLinks}
-              className="rounded border px-3 py-1 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
-            >
-              Copy links
-            </button>
-            <button
-              onClick={handleExportCsv}
-              title="Export every matching clip (not just this page)"
-              className="rounded border px-3 py-1 text-sm hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
-            >
-              Export CSV
-            </button>
-          </>
-        }
-      />
+      <PageHeader title="Queue" subtitle="Filter, search, and act on clips in bulk." />
 
       <Toolbar
         start={
