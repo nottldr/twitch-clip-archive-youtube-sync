@@ -60,27 +60,30 @@ afterEach(() => {
 });
 
 describe("publishNow", () => {
-  it("happy path: pushes both files and records success", async () => {
+  it("happy path: atomic publishFiles call records single commit SHA", async () => {
     mockFetch([
-      { status: 404, body: {} }, // GET clips.json
-      { status: 201, body: { commit: { sha: "clips-sha" } } }, // PUT clips.json
-      { status: 404, body: {} }, // GET manifest.json
-      { status: 201, body: { commit: { sha: "manifest-sha" } } }, // PUT manifest.json
+      { status: 200, body: { object: { sha: "parent-commit" } } }, // GET ref
+      { status: 200, body: { sha: "parent-commit", tree: { sha: "parent-tree" } } }, // GET commit
+      { status: 201, body: { sha: "blob-clips" } }, // POST blob clips.json
+      { status: 201, body: { sha: "blob-manifest" } }, // POST blob manifest.json
+      { status: 201, body: { sha: "new-tree" } }, // POST tree
+      { status: 201, body: { sha: "new-commit", tree: { sha: "new-tree" } } }, // POST commit
+      { status: 200, body: { ref: "refs/heads/main", object: { sha: "new-commit" } } }, // PATCH ref
     ]);
 
     const outcome = await publishNow({ config: CFG, clipsRepo, mirrorRepo });
     expect(outcome.ok).toBe(true);
     expect(outcome.clipCount).toBe(2);
-    expect(outcome.commitSha).toBe("manifest-sha");
+    expect(outcome.commitSha).toBe("new-commit");
 
     const last = mirrorRepo.lastSuccess();
-    expect(last?.commit_sha).toBe("manifest-sha");
+    expect(last?.commit_sha).toBe("new-commit");
     expect(last?.clip_count).toBe(2);
   });
 
-  it("records failure when GitHub returns an error", async () => {
+  it("records failure when GitHub returns an error mid-flow", async () => {
     mockFetch([
-      { status: 401, body: { message: "bad creds" } }, // GET clips.json → not 404, throws
+      { status: 401, body: { message: "bad creds" } }, // GET ref fails
     ]);
 
     const outcome = await publishNow({ config: CFG, clipsRepo, mirrorRepo });

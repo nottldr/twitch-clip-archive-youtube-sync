@@ -5,7 +5,7 @@ import type { MirrorPublishesRepository } from "#server/db/repositories/mirror-p
 import { createLogger } from "#server/logger.js";
 
 import { buildSnapshot } from "./builder.js";
-import { type MirrorRepoConfig, publishFile } from "./github.js";
+import { type MirrorRepoConfig, publishFiles } from "./github.js";
 
 const logger = createLogger("mirror");
 
@@ -49,11 +49,18 @@ export async function publishNow(deps: PublisherDeps): Promise<PublishOutcome> {
   const commitMessage = `mirror: snapshot @ ${snapshot.manifest.generated_at} (${String(snapshot.manifest.clip_count)} clips)`;
 
   try {
-    // Push clips.json first, then manifest.json. If clips.json fails, manifest
-    // is never updated — friends checking manifest.generated_at can trust
-    // clips.json matches.
-    await publishFile(cfg, "clips.json", snapshot.clipsJson, commitMessage);
-    const sha = await publishFile(cfg, "manifest.json", snapshot.manifestJson, commitMessage);
+    // Atomic: one tree, one commit covering both files. Consumers fetching
+    // mid-publish see either both old files or both new files, never one of
+    // each. base_tree inheritance preserves anything else in the repo (README,
+    // .gitignore, etc.).
+    const sha = await publishFiles(
+      cfg,
+      [
+        { path: "clips.json", content: snapshot.clipsJson },
+        { path: "manifest.json", content: snapshot.manifestJson },
+      ],
+      commitMessage,
+    );
 
     deps.mirrorRepo.recordSuccess({
       clipCount: snapshot.manifest.clip_count,
